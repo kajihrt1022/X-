@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlignLeft, ArrowRight, ArrowUpRight, Bookmark, Check, CheckCheck, ChevronDown, ChevronRight, CircleAlert, CircleHelp, Clock3, Copy, ExternalLink, Heart, History, Home, Layers3, Link2, LoaderCircle, Menu, MessageCircle, MessageSquare, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Smile, Sparkles, Sprout, Trash2, X, Zap } from 'lucide-react';
 import { countText, ensureEmoji, generateLocal } from './generator.js';
+import { buildChatGPTPrompt } from './reply-instructions.js';
 import { CONTENT_LIMIT, parsePostUrl, readPostThread } from './post-reader.js';
 
 const STANDALONE = globalThis.__KOTOBA_STANDALONE__ === true;
@@ -23,6 +24,21 @@ function historyItems() {
 function dateLabel(date) {
   const value = new Date(date);
   return Number.isNaN(value.getTime()) ? '' : new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(value);
+}
+
+async function writeClipboard(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const previous = document.activeElement;
+    const input = document.createElement('textarea');
+    input.value = text;
+    input.style.cssText = 'position:fixed;left:-9999px;top:0;';
+    document.body.append(input);
+    let success;
+    try { input.select(); success = document.execCommand('copy'); }
+    finally { input.remove(); previous?.focus(); }
+    if (!success) throw new Error('Copy unavailable');
+  }
 }
 
 function Brand({ small = false }) {
@@ -55,6 +71,7 @@ function ReplyCard({ reply, index, archive = false, saved, copied, onCopy, onSav
     <div className="reply-card-top"><span className={`kind-tag ${reply.kind}`}><Icon size={12} />{kind.name}</span>{index === 0 && !archive && <span className="recommend"><span>♛</span> おすすめ</span>}{archive && reply.createdAt && <time>{dateLabel(reply.createdAt)}</time>}</div>
     <h3>{reply.title}</h3>
     {archive ? <p className="saved-text">{reply.text}</p> : <textarea className="reply-editor" aria-label={`案${index + 1}の本文`} value={reply.text} maxLength={1000} rows={Math.max(3, Math.ceil(reply.text.length / 24))} onChange={event => onEdit(reply.id, event.target.value)} />}
+    {reply.basis && <details className="reply-basis"><summary>この返信の根拠</summary><p>{reply.note}</p><blockquote>{reply.basis}</blockquote></details>}
     {archive && <details className="source-details"><summary>元の投稿を見る</summary><p>{reply.post}</p>{reply.sourceUrl && <a href={reply.sourceUrl} target="_blank" rel="noreferrer">Xで開く <ArrowUpRight size={11} /></a>}</details>}
     <div className="reply-card-footer"><span className={`text-count ${over ? 'over' : ''}`}>{countText(reply.text)}<span> / 280</span></span><div className="card-actions"><button type="button" className={`copy-button ${copied === reply.id ? 'copied' : ''}`} disabled={over || !reply.text.trim()} onClick={() => onCopy(reply)}>{copied === reply.id ? <CheckCheck size={15} /> : <Copy size={15} />}{copied === reply.id ? 'コピー済み' : 'コピー'}</button><button type="button" className={`icon-button save-button ${isSaved ? 'is-saved' : ''}`} aria-label={archive ? '保存を削除' : isSaved ? `案${index + 1}の保存を解除` : `案${index + 1}を保存`} onClick={() => archive ? onDelete(reply.id) : onSave(reply)}>{archive ? <Trash2 size={17} /> : <Heart size={19} fill={isSaved ? 'currentColor' : 'none'} />}</button></div></div>
     {over && <p className="field-error">Xの文字数上限を超えています。280以内に整えてください。</p>}
@@ -73,6 +90,8 @@ function App() {
   const [length, setLength] = useState(['short', 'medium', 'long'].includes(initialPrefs.current?.length) ? initialPrefs.current.length : 'medium');
   const [directions, setDirections] = useState(['insight', 'action']);
   const [replies, setReplies] = useState([]);
+  const [analysis, setAnalysis] = useState(null);
+  const [handoff, setHandoff] = useState(null);
   const [saved, setSaved] = useState(savedItems);
   const [history, setHistory] = useState(historyItems);
   const [mode, setMode] = useState(STANDALONE ? 'local' : null);
@@ -140,18 +159,7 @@ function App() {
   async function copy(reply) {
     const text = ensureEmoji(reply.text);
     try {
-      try { await navigator.clipboard.writeText(text); }
-      catch {
-        const previous = document.activeElement;
-        const input = document.createElement('textarea');
-        input.value = text;
-        input.style.cssText = 'position:fixed;left:-9999px;top:0;';
-        document.body.append(input);
-        let success;
-        try { input.select(); success = document.execCommand('copy'); }
-        finally { input.remove(); previous?.focus(); }
-        if (!success) throw new Error('Copy unavailable');
-      }
+      await writeClipboard(text);
       editReply(reply.id, text); setCopied(reply.id); setToast('コピーしました。Xの返信欄に貼り付けて使えます。');
     } catch { setToast('コピーできませんでした。本文を選択してコピーしてください。'); }
   }
@@ -188,11 +196,12 @@ function App() {
     catch { setToast('履歴を削除できませんでした。ブラウザの保存設定をご確認ください。'); }
   }
   function restoreHistory(item) {
+    setHandoff(null); setAnalysis(item.analysis || null);
     setPost(item.post); setAuthor(item.author || ''); setThought(item.thought || ''); setLength(item.length || 'medium'); setDirections(item.directions || ['insight', 'action']); setInputMode('text'); setSource(null); setPostUrl(item.sourceUrl || '');
     setReplies(item.replies.filter(reply => reply && typeof reply.text === 'string').map(reply => ({ ...reply, id: uniqueId() })));
     setSnapshot({ post: item.post, sourceUrl: item.sourceUrl || '' }); setResultMode(item.mode || 'local'); setError(''); navigate('create'); setToast('履歴の本文と返信案を読み込みました');
   }
-  async function generate(event) {
+  async function generate(event, patternOnly = false) {
     event?.preventDefault();
     if (working) return;
     setError(''); setBusy(true);
@@ -206,25 +215,39 @@ function App() {
         if (source?.id !== parsed.id) { imported = await importThread(); body = imported.body; recipient = imported.author.name; }
       }
       if (!body.trim()) { postRef.current?.focus(); throw new Error('リプライしたい投稿の本文を入力してください。'); }
-      timeout = setTimeout(() => controller.abort(), 35000);
+      timeout = setTimeout(() => controller.abort(), 75000);
       const params = { post: body, author: recipient, thought, length, directions, variation };
+      if (!patternOnly && mode !== 'ai') {
+        const prompt = buildChatGPTPrompt(params, inputMode === 'url' ? imported : null);
+        setHandoff({ prompt, postCount: inputMode === 'url' ? imported?.posts?.length || 1 : 1 });
+        setReplies([]); setAnalysis(null); setSnapshot({ post: body, sourceUrl: imported?.url || '' });
+        if (window.innerWidth < 1000) setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+        return;
+      }
       let data;
-      if (STANDALONE) data = generateLocal(params);
+      if (patternOnly) data = generateLocal(params);
       else {
         const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params), signal: controller.signal });
         data = await response.json();
         if (!response.ok) throw new Error(data.error || '作成できませんでした。');
       }
+      if (!patternOnly && data.mode !== 'ai') throw new Error('AIに接続できませんでした。ChatGPTでの作成を使うか、接続設定を確認してください。');
       if (!Array.isArray(data.replies) || data.replies.length !== 3) throw new Error('返信案を読み取れませんでした。もう一度お試しください。');
       const items = data.replies.map(reply => ({ ...reply, id: uniqueId() }));
       const sourceUrl = inputMode === 'url' ? imported?.url || '' : '';
-      setReplies(items); setResultMode(data.mode); setSnapshot({ post: body, sourceUrl }); setVariation(v => v + 1);
-      addHistory({ id: uniqueId(), post: body, author: recipient, thought, length, directions, sourceUrl, postCount: inputMode === 'url' ? imported?.posts?.length || 1 : 1, replies: items, mode: data.mode, createdAt: new Date().toISOString() });
+      setHandoff(null); setAnalysis(data.analysis || null); setReplies(items); setResultMode(data.mode); setSnapshot({ post: body, sourceUrl }); setVariation(v => v + 1);
+      addHistory({ id: uniqueId(), post: body, author: recipient, thought, length, directions, sourceUrl, postCount: inputMode === 'url' ? imported?.posts?.length || 1 : 1, replies: items, analysis: data.analysis || null, mode: data.mode, createdAt: new Date().toISOString() });
       if (window.innerWidth < 1000) setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     } catch (error) {
       if (error.name !== 'AbortError') setError(error.message || '作成できませんでした。もう一度お試しください。');
       else if (controller.signal.aborted) setError('接続がタイムアウトしました。もう一度お試しください。');
     } finally { if (timeout) clearTimeout(timeout); setBusy(false); }
+  }
+  async function copyPrompt() {
+    try {
+      await writeClipboard(handoff.prompt);
+      setToast('依頼文をコピーしました。ChatGPTに貼り付けて送信してください。');
+    } catch { setToast('コピーできませんでした。依頼文を表示して、本文を選択してください。'); }
   }
   function useSample() { cancelImport(); setInputMode('text'); setPost(SAMPLE); setSource(null); setAuthor(''); setError(''); postRef.current?.focus(); }
   function savePreferences() {
@@ -266,10 +289,11 @@ function App() {
               </div> : <div className="text-section"><label htmlFor="post" className="sr-only">相手の投稿</label><div className="post-input-wrap"><textarea id="post" ref={postRef} value={post} onChange={event => { setPost(event.target.value); setError(''); }} maxLength={CONTENT_LIMIT} placeholder={'返信したいポストの本文を貼り付けてください。\n\n長いポストや連続投稿は、最初から最後までまとめて貼り付けられます。'} disabled={working} /><div className="post-input-footer"><span><MessageSquare size={11} />ポストの本文・連続投稿</span><span>{post.length.toLocaleString()} / {CONTENT_LIMIT.toLocaleString()}</span></div></div><div className="author-row"><label htmlFor="author">投稿者のお名前<span>任意</span></label><input id="author" value={author} maxLength={80} onChange={event => setAuthor(event.target.value)} placeholder="例：ヒロさん" disabled={working} /></div></div>}
               <details className="more-options"><summary><Settings size={14} />あなたらしさを、もう少し<ChevronDown size={13} /></summary><div><fieldset disabled={working}><legend className="field-label">伝えたいこと<span>複数選択OK</span></legend><div className="direction-options">{DIRECTIONS.map(item => <button type="button" key={item.id} aria-pressed={directions.includes(item.id)} className={directions.includes(item.id) ? 'selected' : ''} onClick={() => setDirections(items => items.includes(item.id) ? items.length > 1 ? items.filter(value => value !== item.id) : items : [...items, item.id])}>{directions.includes(item.id) ? <Check size={11} /> : <Plus size={11} />}{item.name}</button>)}</div></fieldset><label htmlFor="thought" className="field-label thought-label">あなたの気づき・試したいこと<span>任意</span></label><textarea id="thought" value={thought} onChange={event => setThought(event.target.value)} maxLength={300} rows={2} placeholder="例：まずは今日の小さな気づきを発信してみたい" disabled={working} /><div className="fine-options"><label htmlFor="length">文章の長さ <span className="select-wrap"><select id="length" aria-label="文章の長さ" value={length} onChange={event => setLength(event.target.value)} disabled={working}><option value="short">短め</option><option value="medium">ほどよく</option><option value="long">しっかり</option></select><ChevronDown size={12} /></span></label></div></div></details>
               {error && <p className="form-error" role="alert"><CircleAlert size={16} />{error}</p>}
-              <button className="generate-button" type="submit" disabled={working}>{working ? <LoaderCircle size={19} className="spinning" /> : <Sparkles size={20} />}<span>{importing ? '投稿を読み込んでいます…' : busy ? '返信を整えています…' : '返信を生成'}</span>{!working && <ChevronRight size={20} />}</button>
-              <p className="generation-mode">{mode === 'ai' ? <><Sparkles size={12} />AIが全文を読み、3つの返信をご提案</> : mode === 'unavailable' ? <><CircleAlert size={12} />サーバーに接続できません</> : mode ? <><ShieldCheck size={12} />絵文字つき・文章パターンから3案作成</> : '接続を確認しています…'}<button type="button" aria-label="生成方法について" onClick={() => setModal('about')}><CircleHelp size={12} /></button></p>
+              <button className="generate-button" type="submit" disabled={working}>{working ? <LoaderCircle size={19} className="spinning" /> : <Sparkles size={20} />}<span>{importing ? '投稿を読み込んでいます…' : busy ? (mode === 'ai' ? '全文の意味と根拠を確認しています…' : 'ChatGPTへの依頼を準備しています…') : '返信を生成'}</span>{!working && <ChevronRight size={20} />}</button>
+              <p className="generation-mode">{mode === 'ai' ? <><Sparkles size={12} />AIが主張・結論・根拠を確認してから3案を作成</> : mode === 'unavailable' ? <><CircleAlert size={12} />サーバーに接続できません</> : mode ? <><Sparkles size={12} />全文をChatGPTに渡して内容を踏まえた3案へ</> : '接続を確認しています…'}<button type="button" aria-label="生成方法について" onClick={() => setModal('about')}><CircleHelp size={12} /></button></p>
+              <details className="pattern-option"><summary>AIなしで下書きを作る</summary><p>定型文を使う簡易版です。投稿の意味を理解する機能はありません。</p><button type="button" className="secondary-button" disabled={working} onClick={event => generate(event, true)}>定型文で下書きを作る</button></details>
             </form>
-            <section className="results-panel" ref={resultRef} aria-busy={working} aria-label="リプライの候補"><div className="results-heading"><h2>生成された返信</h2><span>{replies.length ? '3件の提案' : 'あなたらしい言葉を、ここに'}</span></div>{replies.length ? <div className={`reply-list ${working ? 'refreshing' : ''}`}>{replies.map((reply, index) => <ReplyCard {...cardProps} key={reply.id} reply={reply} index={index} />)}<p className="edit-hint"><AlignLeft size={12} />本文はクリックして、自由に編集できます。</p><button type="button" className="regenerate-button" disabled={working} onClick={generate}><RefreshCw size={14} className={working ? 'spinning' : ''} />別の表現でつくり直す</button>{snapshot.sourceUrl && <a className="source-link" href={snapshot.sourceUrl} target="_blank" rel="noreferrer">返信するポストをXで開く<ArrowUpRight size={12} /></a>}</div> : <div className="empty-results"><EmptyArt /><span className="empty-eyebrow">GOOD WORDS. GOOD CONNECTIONS.</span><h3>伝えたい気持ちを、<br />もっと、いい言葉で。</h3><p>ポストのリンクを貼り付けたら<br />「返信を生成」を押すだけ。</p><div className="empty-tags"><span><Sparkles size={12} />具体的な気づき</span><span><Heart size={12} />自然な共感</span><span><MessageCircle size={12} />会話のきっかけ</span></div><div className="empty-tip"><LightbulbIcon /><p>「勉強になります」に、<br /><strong>どこが心に残ったか</strong>をひと言添えて。</p></div></div>}<div className="gentle-reminder"><ShieldCheck size={16} /><p>送る前に、あなたの気持ちと合っているか確認しましょう。<br /><span>体験や実績をつくり足さず、自然なひと言を大切に。</span></p></div></section>
+            <section className="results-panel" ref={resultRef} aria-busy={working} aria-label="リプライの候補"><div className="results-heading"><h2>{handoff ? 'ChatGPTで返信を作成' : replies.length ? '生成された返信' : '返信の作成'}</h2><span>{handoff ? 'ChatGPTで作成' : replies.length ? '3件の提案' : 'あなたらしい言葉を、ここに'}</span></div>{handoff ? <div className="chatgpt-handoff"><span className="modal-icon"><Sparkles size={24} /></span><h3>全文の意味を踏まえた返信を、ChatGPTで。</h3><p>取得・補足した{handoff.postCount}件分の本文と、内容を読み取るための依頼文を準備しました。</p><ol><li>下のボタンで依頼文をコピー</li><li>ChatGPTを開いて貼り付け、送信</li></ol><p className="handoff-detail">主張・結論・注意点を整理してから、根拠のある返信を3案作ります。絵文字も各案に1つ以上添えます。</p><button type="button" className="generate-button" onClick={copyPrompt}><Copy size={17} />1. 依頼文をコピー</button><a className="secondary-button chatgpt-link" href="https://chatgpt.com/" target="_blank" rel="noreferrer">2. ChatGPTを開く<ExternalLink size={14} /></a><details className="prompt-details"><summary>依頼文を表示する</summary><textarea aria-label="ChatGPTへの依頼文" readOnly value={handoff.prompt} rows={10} /></details><p className="coverage-caption">この画面ではAI生成を行っていません。貼り付けて送信すると、本文がChatGPTに渡ります。ChatGPTの利用条件・回数制限が適用されます。</p></div> : replies.length ? <div className={`reply-list ${working ? 'refreshing' : ''}`}>{analysis && <div className="understanding-panel"><h3><Sparkles size={15} />理解した内容</h3><p>{analysis.summary}</p><dl><dt>主張</dt><dd>{analysis.mainPoint}</dd><dt>結論</dt><dd>{analysis.conclusion}</dd></dl>{analysis.cautions?.length > 0 && <ul>{analysis.cautions.map(item => <li key={item}>{item}</li>)}</ul>}</div>}{resultMode === 'local' && <p className="pattern-label">定型文の下書きです。AIによる内容理解は行っていません。</p>}{replies.map((reply, index) => <ReplyCard {...cardProps} key={reply.id} reply={reply} index={index} />)}<p className="edit-hint"><AlignLeft size={12} />本文はクリックして、自由に編集できます。</p><button type="button" className="regenerate-button" disabled={working} onClick={event => generate(event, resultMode === 'local')}><RefreshCw size={14} className={working ? 'spinning' : ''} />別の表現でつくり直す</button>{snapshot.sourceUrl && <a className="source-link" href={snapshot.sourceUrl} target="_blank" rel="noreferrer">返信するポストをXで開く<ArrowUpRight size={12} /></a>}</div> : <div className="empty-results"><EmptyArt /><span className="empty-eyebrow">GOOD WORDS. GOOD CONNECTIONS.</span><h3>伝えたい気持ちを、<br />もっと、いい言葉で。</h3><p>ポストのリンクを貼り付けたら<br />「返信を生成」を押すだけ。</p><div className="empty-tags"><span><Sparkles size={12} />具体的な気づき</span><span><Heart size={12} />自然な共感</span><span><MessageCircle size={12} />会話のきっかけ</span></div><div className="empty-tip"><LightbulbIcon /><p>「勉強になります」に、<br /><strong>どこが心に残ったか</strong>をひと言添えて。</p></div></div>}<div className="gentle-reminder"><ShieldCheck size={16} /><p>送る前に、あなたの気持ちと合っているか確認しましょう。<br /><span>体験や実績をつくり足さず、自然なひと言を大切に。</span></p></div></section>
           </div>
           <section className="benefits" aria-label="Reply Craftの特徴"><div><span><Zap size={21} fill="currentColor" /></span><div><strong>リンクひとつで、かんたん</strong><p>リンクを貼って、ボタンを押して、<br />あなたらしい返信へ。</p></div></div><div><span><Smile size={21} /></span><div><strong>あなたらしい返信</strong><p>気づきや試したいことを添えて、<br />自然な言葉に整えます。</p></div></div><div><span><ShieldCheck size={21} /></span><div><strong>保存はこのブラウザに</strong><p>気に入った言葉を保存して、<br />いつでも振り返れます。</p></div></div><div><span><MessageCircle size={21} /></span><div><strong>Xでのつながりを</strong><p>相手へのリスペクトを込めた、<br />小さな会話のきっかけに。</p></div></div></section>
         </> : page === 'saved' ? <section className="saved-panel"><div className="collection-toolbar"><h2><Heart size={18} />保存した返信<span>{saved.length}</span></h2><label className="search-box"><Search size={15} /><input aria-label="保存したリプライを検索" value={filter} onChange={event => setFilter(event.target.value)} placeholder="言葉で検索する…" /></label></div>{saved.length === 0 ? <div className="archive-empty"><Heart size={35} strokeWidth={1.3} /><h3>残しておきたい言葉を、ここに。</h3><p>返信案のハートを押すと保存できます。</p><button className="secondary-button" onClick={() => navigate('create')}><Plus size={15} />返信をつくる</button></div> : <div className="saved-grid">{filteredSaved.map((reply, index) => <ReplyCard {...cardProps} key={reply.id} reply={reply} index={index} archive />)}{filteredSaved.length === 0 && <p className="no-results">この言葉を含むリプライはありません。</p>}</div>}<p className="storage-note">保存先はこのブラウザです。ブラウザのデータを削除すると、保存した内容も削除されます。</p></section> : <section className="history-panel"><div className="collection-toolbar"><h2><History size={19} />作成履歴<span>{history.length}</span></h2><label className="search-box"><Search size={15} /><input aria-label="履歴を検索" value={filter} onChange={event => setFilter(event.target.value)} placeholder="本文・投稿者で検索…" /></label></div>{history.length === 0 ? <div className="archive-empty"><Clock3 size={35} strokeWidth={1.3} /><h3>ここから、言葉を積み重ねよう。</h3><p>作成した返信と元の投稿が、自動で履歴に残ります。</p><button className="secondary-button" onClick={() => navigate('create')}><Plus size={15} />返信をつくる</button></div> : <div className="history-list">{filteredHistory.map(item => <article className="history-card" key={item.id}><div className="history-card-top"><span><Clock3 size={13} />{dateLabel(item.createdAt)}</span><span>{item.postCount || 1}件の投稿・3件の返信</span><button className="icon-button" aria-label="この履歴を削除" onClick={() => deleteHistory(item.id)}><Trash2 size={15} /></button></div><p>{item.post}</p><div className="history-card-bottom"><span>{item.sourceUrl ? 'リンクから作成' : '本文から作成'}</span><button type="button" onClick={() => restoreHistory(item)}>この返信を開く<ArrowRight size={14} /></button></div></article>)}{filteredHistory.length === 0 && <p className="no-results">この言葉を含む履歴はありません。</p>}</div>}<p className="storage-note">履歴はこのブラウザに最新20件を保存します。保存した返信は履歴と別に残ります。</p></section>}
@@ -277,7 +301,7 @@ function App() {
       </main>
     </div>
     {toast && <div className="toast" role="status"><Check size={17} />{toast}</div>}
-    {modal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setModal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={modalRef}><button className="modal-close icon-button" aria-label="閉じる" onClick={() => setModal(null)}><X size={20} /></button><span className="modal-icon">{modal === 'preferences' ? <Settings size={23} /> : modal === 'reading' ? <Link2 size={24} /> : <Sparkles size={24} />}</span><h2 id="modal-title">{modal === 'preferences' ? '返信の設定' : modal === 'reading' ? 'リンク読み取りとデータについて' : modal === 'about' ? '返信案のつくり方' : 'ひと言から、会話がはじまる。'}</h2>{modal === 'preferences' ? <><p className="modal-description">文章の長さを保存できます。絵文字は必ず1つ以上添えます。</p><label className="modal-label">文章の長さ<select value={length} onChange={event => setLength(event.target.value)}><option value="short">短め</option><option value="medium">ほどよく</option><option value="long">しっかり</option></select></label><button className="generate-button" onClick={savePreferences}><Check size={17} />設定を保存する</button></> : modal === 'reading' ? <><div className="guide-item"><strong>公開ポストと、同じ投稿者の連続投稿を取得</strong><p>ポストのIDを外部の非公式取得サービスFxEmbed（FxTwitter）へ送信して本文を取得します。途中のリンクから、前後の投稿をたどります。他ユーザーの返信は混ぜず、取得できた投稿を時系列順に表示します。Xのログイン情報やパスワードは不要です。</p></div><div className="guide-item"><strong>読み込めた範囲を確認できます</strong><p>非公開・削除・取得制限のある投稿や、画像内の文字、動画・音声の内容は取得できません。サービスがすべての続きを返す保証はありません。件数と本文を確認し、足りない内容は編集欄で補足してください。</p></div><div className="guide-item"><strong>保存と履歴は、このブラウザの中に</strong><p>保存した返信・履歴・文体設定はブラウザ内に保管します。別の端末とは同期しません。本文を貼り付けて文章パターンで生成する場合は、外部サービスへの通信は行いません。</p></div></> : modal === 'about' ? <><div className="guide-item"><strong>文章パターン（標準・無料）</strong><p>読み込んだ全文から、冒頭・途中・最後の言葉を拾い、3つの表現に整えます。文脈を意味理解するAIではありません。投稿と追加した気づきのつながりを、送信前に確認してください。</p></div><div className="guide-item"><strong>AIでの生成（サーバー版のみ）</strong><p>サーバーにAIのAPIキーを設定すると、全文をもとにした生成を利用できます。現在のGitHub Pages版は文章パターンで動作します。AI利用時は投稿が接続先AIに送信され、別途利用料金がかかります。</p></div><div className="privacy-note">返信を保証するものではありません。相手への敬意を込めて、無理のないペースでご利用ください。</div></> : <><div className="guide-item"><span>01</span><div><strong>リンクを貼るだけで、投稿の流れを確認。</strong><p>XのポストURLを貼り付けて「読み込む」を押します。「返信を生成」から、そのまま読み取りと作成を続けることもできます。</p></div></div><div className="guide-item"><span>02</span><div><strong>選ばなくても、自然なひと言に。</strong><p>返信の雰囲気はおまかせで、絵文字を必ず1つ以上添えます。質問を添えたいときは「あなたらしさを、もう少し」を開いて選択してください。</p></div></div><div className="guide-item"><span>03</span><div><strong>ひと言整えて、コピーしてXへ。</strong><p>本文をクリックすると編集できます。ハートで保存、作成した返信は履歴からも振り返れます。Xへの自動投稿は行いません。</p></div></div><button className="secondary-button" onClick={() => setModal('reading')}><Link2 size={14} />リンク読み取りについて</button></>}</section></div>}
+    {modal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setModal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={modalRef}><button className="modal-close icon-button" aria-label="閉じる" onClick={() => setModal(null)}><X size={20} /></button><span className="modal-icon">{modal === 'preferences' ? <Settings size={23} /> : modal === 'reading' ? <Link2 size={24} /> : <Sparkles size={24} />}</span><h2 id="modal-title">{modal === 'preferences' ? '返信の設定' : modal === 'reading' ? 'リンク読み取りとデータについて' : modal === 'about' ? '返信案のつくり方' : 'ひと言から、会話がはじまる。'}</h2>{modal === 'preferences' ? <><p className="modal-description">文章の長さを保存できます。絵文字は必ず1つ以上添えます。</p><label className="modal-label">文章の長さ<select value={length} onChange={event => setLength(event.target.value)}><option value="short">短め</option><option value="medium">ほどよく</option><option value="long">しっかり</option></select></label><button className="generate-button" onClick={savePreferences}><Check size={17} />設定を保存する</button></> : modal === 'reading' ? <><div className="guide-item"><strong>公開ポストと、同じ投稿者の連続投稿を取得</strong><p>ポストのIDを外部の非公式取得サービスFxEmbed（FxTwitter）へ送信して本文を取得します。途中のリンクから、前後の投稿をたどります。他ユーザーの返信は混ぜず、取得できた投稿を時系列順に表示します。Xのログイン情報やパスワードは不要です。</p></div><div className="guide-item"><strong>読み込めた範囲を確認できます</strong><p>非公開・削除・取得制限のある投稿や、画像内の文字、動画・音声の内容は取得できません。サービスがすべての続きを返す保証はありません。件数と本文を確認し、足りない内容は編集欄で補足してください。</p></div><div className="guide-item"><strong>保存と履歴は、このブラウザの中に</strong><p>保存した返信・履歴・文体設定はブラウザ内に保管します。別の端末とは同期しません。本文を貼り付けて文章パターンで生成する場合は、外部サービスへの通信は行いません。</p></div></> : modal === 'about' ? <><div className="guide-item"><strong>ChatGPTで内容を理解して返信（公開版）</strong><p>全文と、主張・結論・注意点を整理する依頼文を準備します。依頼文をコピーし、ChatGPTへ貼り付けて送信してください。このサイトでAI生成したようには表示しません。追加のAPI設定は不要で、ChatGPTの利用条件・回数制限が適用されます。</p></div><div className="guide-item"><strong>AIでの生成（サーバー版のみ）</strong><p>サーバーにAIのAPIキーを設定すると、この画面で生成できます。まず全文から主張・結論・根拠を整理し、次にその根拠に沿って3案を作成します。AI接続が失敗しても定型文には切り替えません。API利用料金がかかります。</p></div><div className="privacy-note">返信を保証するものではありません。相手への敬意を込めて、無理のないペースでご利用ください。</div></> : <><div className="guide-item"><span>01</span><div><strong>リンクを貼るだけで、投稿の流れを確認。</strong><p>XのポストURLを貼り付けて「読み込む」を押します。「返信を生成」から、そのまま読み取りと作成を続けることもできます。</p></div></div><div className="guide-item"><span>02</span><div><strong>選ばなくても、自然なひと言に。</strong><p>返信の雰囲気はおまかせで、絵文字を必ず1つ以上添えます。質問を添えたいときは「あなたらしさを、もう少し」を開いて選択してください。</p></div></div><div className="guide-item"><span>03</span><div><strong>ChatGPTで内容を確認して、返信へ。</strong><p>公開版は依頼文をコピーし、ChatGPTへ貼り付けて送信します。内容理解と返信3案を確認して使ってください。サーバーにAI設定がある場合はこの画面で生成・編集・保存できます。Xへの自動投稿は行いません。</p></div></div><button className="secondary-button" onClick={() => setModal('reading')}><Link2 size={14} />リンク読み取りについて</button></>}</section></div>}
   </div>;
 }
 function LightbulbIcon() { return <span className="tip-spark"><Sparkles size={18} /></span>; }

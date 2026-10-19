@@ -1,3 +1,4 @@
+import { generatePattern } from './helpers.js';
 import { test, expect } from '@playwright/test';
 
 const author = { id: '1000', name: 'スレッドの投稿者', screen_name: 'writer' };
@@ -12,7 +13,7 @@ test('リンクだけで最初から最後まで読み取り、表示・生成�
   await page.route('https://api.fxtwitter.com/2/thread/*', route => { calls++; return route.fulfill({ contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(payload) }); });
   await page.goto('/');
   await page.getByLabel('ポストのリンク', { exact: true }).fill(url);
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.locator('.reply-card')).toHaveCount(3);
   await expect(page.locator('.thread-posts > li')).toHaveCount(3);
   await expect(page.locator('.thread-posts > li').first()).toContainText(root.text);
@@ -43,7 +44,7 @@ test('削除済み・別ユーザー・画像の未解析を明示して、取�
   await expect(page.locator('.thread-posts')).not.toContainText('他のユーザーの返信');
   await page.locator('.edit-imported summary').click();
   await page.getByLabel('取得した投稿の本文').fill('補足した本文です。最後は相手へのリスペクトが大切です。');
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.getByLabel('案3の本文')).toHaveValue(/リスペクト/);
 });
 
@@ -52,16 +53,16 @@ test('取得失敗と不正URLでは返信を作らず、本文入力へ切り�
   await page.route('https://api.fxtwitter.com/2/thread/*', route => { calls++; return route.fulfill({ status: 503, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: '{}' }); });
   await page.goto('/');
   await page.getByLabel('ポストのリンク', { exact: true }).fill('https://example.com/private');
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.getByRole('alert')).toContainText('x.com');
   expect(calls).toBe(0);
   await page.getByLabel('ポストのリンク', { exact: true }).fill(url);
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.getByRole('alert')).toContainText('取得サービス');
   await expect(page.locator('.reply-card')).toHaveCount(0);
   await page.getByRole('button', { name: '本文を貼り付ける' }).click();
   await page.getByLabel('相手の投稿', { exact: true }).fill('小さな行動を毎日続けることが大切です。');
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.locator('.reply-card')).toHaveCount(3);
 });
 

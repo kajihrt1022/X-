@@ -1,3 +1,4 @@
+import { generatePattern } from './helpers.js';
 import { readFile } from 'node:fs/promises';
 import { test, expect } from '@playwright/test';
 
@@ -15,7 +16,7 @@ test('HTML単体で外部通信なしに生成・編集・コピー・保存・�
   await page.getByRole('button', { name: 'サンプルを入れる' }).click();
   await page.getByText('あなたらしさを、もう少し', { exact: true }).click();
   await page.getByRole('button', { name: '質問を添える' }).click();
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.locator('.reply-card')).toHaveCount(3);
   await expect(page.getByLabel('案3の本文')).toHaveValue(/？/);
   const text = '小さな発見を記録する視点が勉強になります。今日から意識してみます。';

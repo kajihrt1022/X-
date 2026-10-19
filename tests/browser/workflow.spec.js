@@ -1,3 +1,4 @@
+import { generatePattern } from './helpers.js';
 import { test, expect } from '@playwright/test';
 import { hasEmoji } from '../../src/generator.js';
 
@@ -6,12 +7,12 @@ test('生成・連続編集・コピー・保存・再読込・検索・削除�
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
   await page.getByRole('button', { name: '本文を貼り付ける' }).click();
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.getByRole('alert')).toContainText('投稿の本文を入力');
   await page.getByRole('button', { name: 'サンプルを入れる' }).click();
   await page.getByText('あなたらしさを、もう少し', { exact: true }).click();
   await page.getByRole('button', { name: '質問を添える' }).click();
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.locator('.reply-card')).toHaveCount(3);
   await expect(page.getByLabel('案3の本文')).toHaveValue(/？/);
   const editor = page.getByLabel('案1の本文');
@@ -37,18 +38,14 @@ test('生成・連続編集・コピー・保存・再読込・検索・削除�
   expect(errors).toEqual([]);
 });
 
-test('URLだけの入力とサーバーエラーを表示し、再試行できる', async ({ page }) => {
+test('本文欄のURLだけの入力を拒否し、本文を入力し直して作成できる', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '本文を貼り付ける' }).click();
   await page.getByLabel('相手の投稿', { exact: true }).fill('https://x.com/user/status/123');
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.getByRole('alert')).toContainText('投稿の本文を貼り付け');
   await page.getByRole('button', { name: 'サンプルを入れる' }).click();
-  await page.route('**/api/generate', route => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: '接続テストエラー' }) }));
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
-  await expect(page.getByRole('alert')).toHaveText('接続テストエラー');
-  await page.unroute('**/api/generate');
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.locator('.reply-card')).toHaveCount(3);
 });
 
@@ -66,7 +63,7 @@ test('トーン選択が不要で、古い絵文字オフ設定からも絵文�
   await page.reload();
   await expect(page.getByLabel('文章の長さ', { exact: true })).toHaveValue('short');
   await page.getByRole('button', { name: 'サンプルを入れる' }).click();
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.locator('.reply-card')).toHaveCount(3);
   for (const value of await page.locator('.reply-editor').evaluateAll(elements => elements.map(element => element.value))) expect(hasEmoji(value)).toBe(true);
   await page.getByRole('button', { name: '使い方ガイド' }).click();
@@ -80,7 +77,7 @@ test('スマートフォンでも横にはみ出さず、生成と保存画面�
   await page.goto('/');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole('button', { name: 'サンプルを入れる' }).click();
-  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await generatePattern(page);
   await expect(page.locator('.reply-card')).toHaveCount(3);
   await page.getByRole('button', { name: '案1を保存', exact: true }).click();
   await page.getByRole('button', { name: 'メニューを開く' }).click();
