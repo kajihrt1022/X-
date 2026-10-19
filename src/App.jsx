@@ -1,99 +1,121 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Bookmark, Check, ChevronDown, ChevronRight, CircleHelp, Copy, Feather, Leaf, Lightbulb, Menu, MessageCircle, MessageSquare, Plus, RefreshCw, Settings2, Sparkles, Trash2, X } from 'lucide-react';
+import { AlignLeft, ArrowRight, ArrowUpRight, Bookmark, Check, CheckCheck, ChevronDown, ChevronRight, CircleAlert, CircleHelp, Clock3, Copy, ExternalLink, Heart, History, Home, Layers3, Link2, LoaderCircle, Menu, MessageCircle, MessageSquare, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Smile, Sparkles, Sprout, Trash2, X, Zap } from 'lucide-react';
 import { countText, generateLocal } from './generator.js';
+import { CONTENT_LIMIT, parsePostUrl, readPostThread } from './post-reader.js';
 
 const STANDALONE = globalThis.__KOTOBA_STANDALONE__ === true;
 const uniqueId = () => globalThis.crypto?.randomUUID?.() || `reply-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-const SAMPLE = '発信を続けるコツは、毎回「すごいこと」を書こうとしないこと。\n今日気づいたこと、失敗して学んだこと、誰かに伝えたい小さな発見。\nその積み重ねが、その人らしい発信になる。完璧な1本より、等身大の10本。';
-const TONES = [{ id: 'natural', name: '自然で丁寧' }, { id: 'warm', name: 'やわらかめ' }, { id: 'brief', name: '短く端的' }];
-const DIRECTIONS = [{ id: 'insight', name: '気づきを伝える', icon: Lightbulb }, { id: 'action', name: '試してみたい', icon: Leaf }, { id: 'question', name: '質問を添える', icon: MessageCircle }];
-const KIND = { insight: '気づき・共感', action: '実践への一歩', question: '会話のきっかけ' };
+const SAMPLE = '発信を続けるコツは、毎回「すごいこと」を書こうとしないこと。\n今日気づいたこと、失敗して学んだこと、誰かに伝えたい小さな発見。その積み重ねが、その人らしい発信になる。\n\n大事なのは、誰かの正解をなぞるより、自分の気づきを自分の言葉で伝えること。\n\n完璧な1本より、等身大の10本。まずは今日の小さな気づきを、一つだけ書いてみよう。';
+const TONES = [
+  { id: 'natural', name: '丁寧', icon: Sparkles, detail: '自然で丁寧に' },
+  { id: 'warm', name: 'フレンドリー', icon: Smile, detail: '親しみのある言葉で' },
+  { id: 'empathy', name: '共感', icon: Heart, detail: '気づきに寄り添って' },
+  { id: 'action', name: '実践', icon: Sprout, detail: 'やってみたいを伝える' },
+  { id: 'brief', name: '短文', icon: AlignLeft, detail: '短く、端的に' },
+];
+const DIRECTIONS = [{ id: 'insight', name: '気づきを伝える' }, { id: 'action', name: '試してみたい' }, { id: 'question', name: '質問を添える' }];
+const KINDS = { insight: { name: '丁寧・気づき', icon: Sparkles }, action: { name: '実践', icon: Sprout }, question: { name: '問いかけ', icon: MessageCircle }, empathy: { name: '共感', icon: Heart } };
 
 function readStorage(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
-
-function ReplyIllustration() {
-  return <svg className="reply-illustration" viewBox="0 0 260 178" fill="none" aria-hidden="true">
-    <ellipse cx="133" cy="152" rx="84" ry="10" fill="#e8e9df" />
-    <path d="M58 44a12 12 0 0 1 12-12h108a12 12 0 0 1 12 12v65a12 12 0 0 1-12 12h-58l-24 20v-20H70a12 12 0 0 1-12-12z" fill="#fff" stroke="#d4d9c9" strokeWidth="1.7" transform="rotate(-7 124 86)" />
-    <path d="M84 58h75M84 73h58M84 88h36" stroke="#d7ddcd" strokeWidth="5" strokeLinecap="round" transform="rotate(-7 124 86)" />
-    <path d="M123 88a10 10 0 0 1 10-10h67a10 10 0 0 1 10 10v43a10 10 0 0 1-10 10h-8v13l-18-13h-41a10 10 0 0 1-10-10z" fill="#65754d" transform="rotate(7 167 114)" />
-    <path d="m144 109 9 9 22-22" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M211 62c-14-22 4-32 12-30 4 13 0 24-12 30Zm0 0c2-16-14-21-20-17-1 11 8 16 20 17Z" fill="#b6c3a0" />
-    <path d="m211 62-7 16" stroke="#b6c3a0" strokeWidth="2" />
-    <path d="m42 91 3 7 7 3-7 3-3 7-3-7-7-3 7-3z" fill="#bdc9aa" />
-    <circle cx="191" cy="26" r="3" fill="#c6cebb" />
-  </svg>;
+function savedItems() {
+  const items = readStorage('kotoba-saved', []);
+  return Array.isArray(items) ? items.filter(item => item && typeof item.id === 'string' && typeof item.text === 'string' && typeof item.title === 'string') : [];
+}
+function historyItems() {
+  const items = readStorage('kotoba-history', []);
+  return Array.isArray(items) ? items.filter(item => item && typeof item.id === 'string' && typeof item.post === 'string' && Array.isArray(item.replies)).slice(0, 20) : [];
+}
+function dateLabel(date) {
+  const value = new Date(date);
+  return Number.isNaN(value.getTime()) ? '' : new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(value);
 }
 
+function Brand({ small = false }) {
+  return <span className={`brand ${small ? 'brand-small' : ''}`}><span className="brand-icon"><Send size={small ? 17 : 21} strokeWidth={2} fill="white" /></span><span>Reply Craft</span></span>;
+}
+function HeroArt() {
+  return <svg className="hero-art" viewBox="0 0 330 146" fill="none" aria-hidden="true">
+    <circle cx="218" cy="68" r="89" fill="#bedaff" fillOpacity=".45" />
+    <path d="M91 35a10 10 0 0 1 10-10h107a10 10 0 0 1 10 10v45a10 10 0 0 1-10 10h-65l-16 12V90h-26a10 10 0 0 1-10-10z" fill="#fff" fillOpacity=".67" transform="rotate(8 154 62)" />
+    <path d="M115 44h75M115 55h59M115 66h41" stroke="#aacdfb" strokeWidth="5" strokeLinecap="round" transform="rotate(8 154 62)" />
+    <rect x="216" y="24" width="57" height="57" rx="16" fill="#153855" transform="rotate(-12 245 53)" />
+    <path d="m234 39 23 29h-7l-23-29h7Zm22 0-24 29" stroke="white" strokeWidth="1.8" strokeLinejoin="round" transform="rotate(-12 245 53)" />
+    <path d="M64 84a8 8 0 0 1 8-8h42a8 8 0 0 1 8 8v17a8 8 0 0 1-8 8h-9v9l-12-9H72a8 8 0 0 1-8-8z" fill="#96c4ff" transform="rotate(-8 93 96)" />
+    <path d="M77 88h31M77 96h21" stroke="#d5e7ff" strokeWidth="3" strokeLinecap="round" transform="rotate(-8 93 96)" />
+    <path d="M251 100a8 8 0 0 1 8-8h42a8 8 0 0 1 8 8v17a8 8 0 0 1-8 8h-9v9l-12-9h-21a8 8 0 0 1-8-8z" fill="#fff" fillOpacity=".8" />
+    <path d="M264 103h30M264 112h19" stroke="#aacdfb" strokeWidth="3" strokeLinecap="round" />
+    <path d="m51 33 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z" fill="#73aaff" />
+    <circle cx="290" cy="52" r="3" fill="#8ab8fb" />
+  </svg>;
+}
+function EmptyArt() {
+  return <svg className="empty-art" viewBox="0 0 240 160" fill="none" aria-hidden="true"><ellipse cx="119" cy="143" rx="79" ry="8" fill="#dfebfd" /><rect x="45" y="28" width="132" height="89" rx="12" fill="white" stroke="#c5daf9" strokeWidth="1.5" transform="rotate(-7 111 72)" /><path d="M66 54h78M66 68h62M66 82h39" stroke="#d5e6ff" strokeWidth="6" strokeLinecap="round" transform="rotate(-7 111 72)" /><rect x="118" y="78" width="79" height="57" rx="12" fill="url(#empty-blue)" transform="rotate(8 158 106)" /><path d="m139 102 8 8 19-18" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /><path d="m186 31 4 9 9 4-9 4-4 9-4-9-9-4 9-4Z" fill="#97bdff" /><circle cx="34" cy="102" r="4" fill="#c6ddff" /><defs><linearGradient id="empty-blue" x1="118" y1="78" x2="197" y2="135"><stop stopColor="#38afff" /><stop offset="1" stopColor="#1760ff" /></linearGradient></defs></svg>;
+}
 function ReplyCard({ reply, index, archive = false, saved, copied, onCopy, onSave, onDelete, onEdit }) {
   const isSaved = saved.some(item => item.text === reply.text);
   const over = countText(reply.text) > 280;
+  const kind = KINDS[reply.kind] || KINDS.insight;
+  const Icon = kind.icon;
   return <article className={`reply-card ${index === 0 && !archive ? 'recommended-card' : ''}`}>
-    <div className="reply-card-top"><span className={`kind-tag ${reply.kind}`}><span className="tag-dot" />{KIND[reply.kind] || KIND.insight}</span>{index === 0 && !archive && <span className="recommend"><Sparkles size={11} /> おすすめ</span>}<span className="card-number">0{index + 1}</span></div>
+    <div className="reply-card-top"><span className={`kind-tag ${reply.kind}`}><Icon size={12} />{kind.name}</span>{index === 0 && !archive && <span className="recommend"><span>♛</span> おすすめ</span>}{archive && reply.createdAt && <time>{dateLabel(reply.createdAt)}</time>}</div>
     <h3>{reply.title}</h3>
     {archive ? <p className="saved-text">{reply.text}</p> : <textarea className="reply-editor" aria-label={`案${index + 1}の本文`} value={reply.text} maxLength={1000} rows={Math.max(3, Math.ceil(reply.text.length / 24))} onChange={event => onEdit(reply.id, event.target.value)} />}
-    {!archive && <p className="reply-note"><Lightbulb size={12} />{reply.note}</p>}
-    {archive && <details className="source-details"><summary>元の投稿を見る</summary><p>{reply.post}</p></details>}
-    <div className="reply-card-footer"><span className={over ? 'text-count over' : 'text-count'}>{countText(reply.text)}<span> / 280</span></span><div className="card-actions">
-      <button type="button" className={`icon-button save-button ${isSaved ? 'is-saved' : ''}`} aria-label={archive ? '保存を削除' : isSaved ? `案${index + 1}の保存を解除` : `案${index + 1}を保存`} title={archive ? '保存を削除' : '保存'} onClick={() => archive ? onDelete(reply.id) : onSave(reply)}>{archive ? <Trash2 size={15} /> : <Bookmark size={15} fill={isSaved ? 'currentColor' : 'none'} />}</button>
-      <button type="button" className={`copy-button ${copied === reply.id ? 'copied' : ''}`} disabled={over || !reply.text.trim()} onClick={() => onCopy(reply)}>{copied === reply.id ? <Check size={13} /> : <Copy size={13} />}{copied === reply.id ? 'コピー済み' : 'コピー'}</button>
-    </div></div>
+    {archive && <details className="source-details"><summary>元の投稿を見る</summary><p>{reply.post}</p>{reply.sourceUrl && <a href={reply.sourceUrl} target="_blank" rel="noreferrer">Xで開く <ArrowUpRight size={11} /></a>}</details>}
+    <div className="reply-card-footer"><span className={`text-count ${over ? 'over' : ''}`}>{countText(reply.text)}<span> / 280</span></span><div className="card-actions"><button type="button" className={`copy-button ${copied === reply.id ? 'copied' : ''}`} disabled={over || !reply.text.trim()} onClick={() => onCopy(reply)}>{copied === reply.id ? <CheckCheck size={15} /> : <Copy size={15} />}{copied === reply.id ? 'コピー済み' : 'コピー'}</button><button type="button" className={`icon-button save-button ${isSaved ? 'is-saved' : ''}`} aria-label={archive ? '保存を削除' : isSaved ? `案${index + 1}の保存を解除` : `案${index + 1}を保存`} onClick={() => archive ? onDelete(reply.id) : onSave(reply)}>{archive ? <Trash2 size={17} /> : <Heart size={19} fill={isSaved ? 'currentColor' : 'none'} />}</button></div></div>
     {over && <p className="field-error">Xの文字数上限を超えています。280以内に整えてください。</p>}
   </article>;
 }
 
-
 function App() {
   const initialPrefs = useRef(readStorage('kotoba-preferences', {}));
-  const [page, setPage] = useState('create');
+  const [page, setPage] = useState('home');
+  const [inputMode, setInputMode] = useState('url');
+  const [postUrl, setPostUrl] = useState('');
+  const [source, setSource] = useState(null);
   const [post, setPost] = useState('');
   const [author, setAuthor] = useState('');
   const [thought, setThought] = useState('');
-  const [tone, setTone] = useState(initialPrefs.current.tone || 'natural');
-  const [length, setLength] = useState(initialPrefs.current.length || 'medium');
-  const [emoji, setEmoji] = useState(initialPrefs.current.emoji || false);
+  const [tone, setTone] = useState(TONES.some(item => item.id === initialPrefs.current?.tone) ? initialPrefs.current.tone : 'natural');
+  const [length, setLength] = useState(['short', 'medium', 'long'].includes(initialPrefs.current?.length) ? initialPrefs.current.length : 'medium');
+  const [emoji, setEmoji] = useState(initialPrefs.current?.emoji === true);
   const [directions, setDirections] = useState(['insight', 'action']);
   const [replies, setReplies] = useState([]);
-  const [saved, setSaved] = useState(() => {
-    const items = readStorage('kotoba-saved', []);
-    return Array.isArray(items) ? items.filter(item => item && typeof item.text === 'string' && typeof item.title === 'string' && typeof item.id === 'string') : [];
-  });
-  const [mode, setMode] = useState(null);
+  const [saved, setSaved] = useState(savedItems);
+  const [history, setHistory] = useState(historyItems);
+  const [mode, setMode] = useState(STANDALONE ? 'local' : null);
   const [resultMode, setResultMode] = useState('local');
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const [modal, setModal] = useState(null);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [filter, setFilter] = useState('');
-  const [snapshot, setSnapshot] = useState('');
+  const [snapshot, setSnapshot] = useState({ post: '', sourceUrl: '' });
   const [variation, setVariation] = useState(0);
+  const [copied, setCopied] = useState(null);
   const resultRef = useRef(null);
   const postRef = useRef(null);
+  const urlRef = useRef(null);
   const requestRef = useRef(null);
+  const readerRef = useRef(null);
+  const readSequence = useRef(0);
   const modalRef = useRef(null);
-  const [copied, setCopied] = useState(null);
+  const working = busy || importing;
+  const createPage = page === 'home' || page === 'create';
 
   useEffect(() => {
-    if (STANDALONE) { setMode('local'); return; }
+    if (STANDALONE) return;
     const controller = new AbortController();
     fetch('/api/health', { signal: controller.signal }).then(r => { if (!r.ok) throw new Error(); return r.json(); }).then(data => setMode(data.mode)).catch(error => { if (error.name !== 'AbortError') setMode('unavailable'); });
     return () => controller.abort();
   }, []);
-  useEffect(() => () => requestRef.current?.abort(), []);
-  useEffect(() => {
-    if (!toast) return;
-    const timeout = setTimeout(() => setToast(''), 3500);
-    return () => clearTimeout(timeout);
-  }, [toast]);
-  useEffect(() => {
-    if (!copied) return;
-    const timeout = setTimeout(() => setCopied(null), 2500);
-    return () => clearTimeout(timeout);
-  }, [copied]);
+  useEffect(() => () => { requestRef.current?.abort(); readerRef.current?.abort(); }, []);
+  useEffect(() => { if (!toast) return; const timeout = setTimeout(() => setToast(''), 4500); return () => clearTimeout(timeout); }, [toast]);
+  useEffect(() => { if (!copied) return; const timeout = setTimeout(() => setCopied(null), 2500); return () => clearTimeout(timeout); }, [copied]);
   useEffect(() => {
     if (!modal) return;
     const previous = document.activeElement;
@@ -112,15 +134,15 @@ function App() {
     return () => { document.removeEventListener('keydown', onKey); previous?.focus(); };
   }, [modal]);
 
-  function navigate(next) { setPage(next); setMobileMenu(false); }
+  function navigate(next) { setPage(next); setFilter(''); setMobileMenu(false); }
   function persistSaved(items) {
     try { localStorage.setItem('kotoba-saved', JSON.stringify(items)); setSaved(items); return true; }
     catch { setToast('保存できませんでした。ブラウザの保存容量・設定をご確認ください。'); return false; }
   }
   function toggleSave(reply) {
     const existing = saved.find(item => item.text === reply.text);
-    const next = existing ? saved.filter(item => item.id !== existing.id) : [{ ...reply, id: uniqueId(), post: snapshot, createdAt: new Date().toISOString(), mode: resultMode }, ...saved];
-    if (persistSaved(next)) setToast(existing ? '保存を解除しました' : 'リプライを保存しました');
+    const next = existing ? saved.filter(item => item.id !== existing.id) : [{ ...reply, id: uniqueId(), post: snapshot.post, sourceUrl: snapshot.sourceUrl, createdAt: new Date().toISOString(), mode: resultMode }, ...saved];
+    if (persistSaved(next)) setToast(existing ? '保存を解除しました' : '返信を保存しました');
   }
   async function copy(reply) {
     try {
@@ -136,99 +158,135 @@ function App() {
         finally { input.remove(); previous?.focus(); }
         if (!success) throw new Error('Copy unavailable');
       }
-      setCopied(reply.id); setToast('コピーしました。投稿前にあなたの言葉で確認しましょう。');
-    }
-    catch { setToast('コピーできませんでした。本文を選択してコピーしてください。'); }
+      setCopied(reply.id); setToast('コピーしました。Xの返信欄に貼り付けて使えます。');
+    } catch { setToast('コピーできませんでした。本文を選択してコピーしてください。'); }
   }
   function deleteReply(id) { if (persistSaved(saved.filter(item => item.id !== id))) setToast('保存を削除しました'); }
   function editReply(id, text) { setReplies(items => items.map(item => item.id === id ? { ...item, text } : item)); }
-  const cardProps = { saved, copied, onCopy: copy, onSave: toggleSave, onDelete: deleteReply, onEdit: editReply };
-  function inputData() { return { post, author, thought, tone, length, emoji, directions }; }
+  function cancelImport() { readSequence.current++; readerRef.current?.abort(); setImporting(false); setProgress(''); }
+  function changeUrl(value) { cancelImport(); setPostUrl(value); setSource(null); setError(''); }
+  function chooseInputMode(value) { cancelImport(); setInputMode(value); setError(''); }
+  async function importThread() {
+    const parsed = parsePostUrl(postUrl);
+    readerRef.current?.abort();
+    const controller = new AbortController();
+    readerRef.current = controller;
+    const ticket = ++readSequence.current;
+    setImporting(true); setError('');
+    try {
+      const result = await readPostThread(parsed.url, { signal: controller.signal, onProgress: setProgress });
+      if (ticket !== readSequence.current) throw new DOMException('読み込みを中止しました。', 'AbortError');
+      setSource(result); setPost(result.body); setAuthor(result.author.name);
+      return result;
+    } finally { if (ticket === readSequence.current) { setImporting(false); setProgress(''); } }
+  }
+  async function importOnly() {
+    try { await importThread(); } catch (error) { if (error.name !== 'AbortError') setError(error.message); }
+  }
+  function addHistory(item) {
+    const items = [item, ...history].slice(0, 20);
+    try { localStorage.setItem('kotoba-history', JSON.stringify(items)); setHistory(items); }
+    catch { setToast('返信を作成しました。履歴の保存容量が足りないため、履歴は保存できませんでした。'); }
+  }
+  function deleteHistory(id) {
+    const items = history.filter(item => item.id !== id);
+    try { localStorage.setItem('kotoba-history', JSON.stringify(items)); setHistory(items); setToast('履歴を削除しました'); }
+    catch { setToast('履歴を削除できませんでした。ブラウザの保存設定をご確認ください。'); }
+  }
+  function restoreHistory(item) {
+    setPost(item.post); setAuthor(item.author || ''); setThought(item.thought || ''); setTone(item.tone || 'natural'); setLength(item.length || 'medium'); setEmoji(item.emoji === true); setDirections(item.directions || ['insight', 'action']); setInputMode('text'); setSource(null); setPostUrl(item.sourceUrl || '');
+    setReplies(item.replies.filter(reply => reply && typeof reply.text === 'string').map(reply => ({ ...reply, id: uniqueId() })));
+    setSnapshot({ post: item.post, sourceUrl: item.sourceUrl || '' }); setResultMode(item.mode || 'local'); setError(''); navigate('create'); setToast('履歴の本文と返信案を読み込みました');
+  }
   async function generate(event) {
     event?.preventDefault();
-    if (busy) return;
-    if (!post.trim()) { setError('リプライしたい投稿の本文を入力してください。'); postRef.current?.focus(); return; }
+    if (working) return;
     setError(''); setBusy(true);
     const controller = new AbortController();
     requestRef.current = controller;
-    const timeout = setTimeout(() => controller.abort(), 35000);
-    const requestedPost = post;
+    let timeout;
     try {
+      let body = post, recipient = author, imported = source;
+      if (inputMode === 'url') {
+        const parsed = parsePostUrl(postUrl);
+        if (source?.id !== parsed.id) { imported = await importThread(); body = imported.body; recipient = imported.author.name; }
+      }
+      if (!body.trim()) { postRef.current?.focus(); throw new Error('リプライしたい投稿の本文を入力してください。'); }
+      timeout = setTimeout(() => controller.abort(), 35000);
+      const params = { post: body, author: recipient, thought, tone, length, emoji, directions: tone === 'action' ? [...new Set([...directions, 'action'])] : directions, variation };
       let data;
-      if (STANDALONE) {
-        data = generateLocal({ ...inputData(), variation });
-      } else {
-        const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...inputData(), variation }), signal: controller.signal });
+      if (STANDALONE) data = generateLocal(params);
+      else {
+        const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params), signal: controller.signal });
         data = await response.json();
         if (!response.ok) throw new Error(data.error || '作成できませんでした。');
       }
-      if (!Array.isArray(data.replies) || data.replies.length !== 3) throw new Error('案を読み取れませんでした。もう一度お試しください。');
-      setReplies(data.replies.map(reply => ({ ...reply, id: uniqueId() })));
-      setResultMode(data.mode); setSnapshot(requestedPost); setVariation(v => v + 1);
-      if (window.innerWidth < 1100) setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-    } catch (error) { setError(error.name === 'AbortError' ? '接続がタイムアウトしました。もう一度お試しください。' : error.message || 'サーバーに接続できませんでした。起動状況を確認してください。'); }
-    finally { clearTimeout(timeout); setBusy(false); }
+      if (!Array.isArray(data.replies) || data.replies.length !== 3) throw new Error('返信案を読み取れませんでした。もう一度お試しください。');
+      const items = data.replies.map(reply => ({ ...reply, id: uniqueId() }));
+      if (tone === 'empathy') items[0].kind = 'empathy';
+      const sourceUrl = inputMode === 'url' ? imported?.url || '' : '';
+      setReplies(items); setResultMode(data.mode); setSnapshot({ post: body, sourceUrl }); setVariation(v => v + 1);
+      addHistory({ id: uniqueId(), post: body, author: recipient, thought, tone, length, emoji, directions, sourceUrl, postCount: inputMode === 'url' ? imported?.posts?.length || 1 : 1, replies: items, mode: data.mode, createdAt: new Date().toISOString() });
+      if (window.innerWidth < 1000) setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    } catch (error) {
+      if (error.name !== 'AbortError') setError(error.message || '作成できませんでした。もう一度お試しください。');
+      else if (controller.signal.aborted) setError('接続がタイムアウトしました。もう一度お試しください。');
+    } finally { if (timeout) clearTimeout(timeout); setBusy(false); }
   }
-  function useSample() { setPost(SAMPLE); setError(''); postRef.current?.focus(); }
+  function useSample() { cancelImport(); setInputMode('text'); setPost(SAMPLE); setSource(null); setAuthor(''); setError(''); postRef.current?.focus(); }
   function savePreferences() {
     try { localStorage.setItem('kotoba-preferences', JSON.stringify({ tone, length, emoji })); setModal(null); setToast('いつもの文体を保存しました'); }
     catch { setToast('設定を保存できませんでした。ブラウザの保存設定をご確認ください。'); }
   }
+  const cardProps = { saved, copied, onCopy: copy, onSave: toggleSave, onDelete: deleteReply, onEdit: editReply };
+  const filteredSaved = saved.filter(reply => [reply.text, reply.title, reply.post].join(' ').includes(filter));
+  const filteredHistory = history.filter(item => [item.post, item.author, item.sourceUrl].join(' ').includes(filter));
+  const pageName = page === 'saved' ? '保存した返信' : page === 'history' ? '作成履歴' : page === 'create' ? '返信を作成' : 'ホーム';
 
   return <div className="app-shell">
     {mobileMenu && <button className="sidebar-backdrop" onClick={() => setMobileMenu(false)} aria-label="メニューを閉じる" />}
     <aside className={`sidebar ${mobileMenu ? 'mobile-open' : ''}`}>
-      <a className="brand" href="#" onClick={event => { event.preventDefault(); navigate('create'); }}><span className="brand-symbol"><MessageSquare size={21} strokeWidth={1.7} /><span /></span><span>kotoba<span className="brand-period">.</span></span></a>
-      <div className="brand-subtitle">ことばで、つながる。</div>
-      <div className="workspace-label">YOUR WORKSPACE</div>
+      <a href="#" className="brand-link" onClick={event => { event.preventDefault(); navigate('home'); }}><Brand /></a>
+      <p className="brand-subtitle">いい返信で、つながりが広がる。</p>
+      <span className="workspace-label">YOUR WORKSPACE</span>
       <nav aria-label="メインメニュー">
-        <button className={`nav-item ${page === 'create' ? 'active' : ''}`} onClick={() => navigate('create')}><Feather size={18} /><span>リプライをつくる</span><ChevronRight size={14} /></button>
-        <button className={`nav-item ${page === 'saved' ? 'active' : ''}`} onClick={() => navigate('saved')}><Bookmark size={17} /><span>保存したリプライ</span>{saved.length > 0 && <span className="nav-count">{saved.length}</span>}</button>
+        <button className={`nav-item ${page === 'home' ? 'active' : ''}`} onClick={() => navigate('home')}><Home size={19} fill={page === 'home' ? 'currentColor' : 'none'} /><span>ホーム</span></button>
+        <button className={`nav-item ${page === 'create' ? 'active' : ''}`} onClick={() => navigate('create')}><Send size={18} /><span>返信を作成</span></button>
+        <button aria-label="保存したリプライ" className={`nav-item ${page === 'saved' ? 'active' : ''}`} onClick={() => navigate('saved')}><Heart size={19} /><span>保存した返信</span>{saved.length > 0 && <span className="nav-count">{saved.length}</span>}</button>
+        <button className={`nav-item ${page === 'history' ? 'active' : ''}`} onClick={() => navigate('history')}><History size={19} /><span>履歴</span></button>
+        <button className="nav-item" aria-label="いつもの文体を設定" onClick={() => { setModal('preferences'); setMobileMenu(false); }}><Settings size={19} /><span>設定</span></button>
       </nav>
-      <div className="sidebar-divider" />
-      <button className="nav-item guide-nav" onClick={() => { setModal('guide'); setMobileMenu(false); }}><CircleHelp size={17} /><span>使い方のヒント</span><span className="tiny-arrow">↗</span></button>
-      <div className="sidebar-bottom">
-        <div className="sidebar-note"><span className="note-leaf"><Leaf size={19} strokeWidth={1.4} /></span><p>大きなつながりも、<br />小さなひと言から。</p><span>あなたらしい会話を、少しずつ。</span></div>
-        <button className="preferences" onClick={() => setModal('preferences')}><span className="profile-avatar">H<span /></span><span><strong>あなたのワークスペース</strong><small>いつもの文体を設定</small></span><Settings2 size={15} /></button>
-      </div>
+      <div className="sidebar-bottom"><div className="sidebar-note"><span className="sidebar-note-icon"><Sparkles size={21} /></span><p>あなたらしい言葉で、<br />もっと心地よい<br /><strong>Xの会話を。</strong></p><span>Better replies. Brighter connections.</span><div className="wave wave-one" /><div className="wave wave-two" /></div><button className="help-link" onClick={() => setModal('guide')}><CircleHelp size={16} />使い方とヒント<ArrowUpRight size={13} /></button><div className="sidebar-footer"><span className="free-dot" />FREE WORKSPACE<span>v2.0</span></div></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label="メニューを開く"><Menu size={21} /></button><span className="breadcrumb">ワークスペース</span><ChevronRight size={13} /><span className="current-crumb">{page === 'create' ? 'リプライをつくる' : '保存したリプライ'}</span></div><button className="topbar-help" onClick={() => setModal('guide')}><CircleHelp size={15} /><span>使い方ガイド</span></button></header>
+      <header className="topbar"><div><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label="メニューを開く"><Menu size={22} /></button><span className="mobile-brand"><Brand small /></span><span className="desktop-crumb">ワークスペース <ChevronRight size={13} /> <strong>{pageName}</strong></span></div><div className="topbar-actions"><span className="free-badge"><span />無料で利用できます</span><button className="icon-button" aria-label="使い方ガイド" onClick={() => setModal('guide')}><CircleHelp size={19} /></button><button className="account-avatar" aria-label="いつもの文体を設定" onClick={() => setModal('preferences')}>H</button></div></header>
       <main>
-        <section className="hero"><div><div className="eyebrow"><span /> MAKE A LITTLE CONNECTION</div><h1>{page === 'create' ? <>会話がはじまる、<br className="mobile-break" />あなたらしいリプライを<span className="olive-period">。</span></> : <>とっておきの言葉を、<br className="mobile-break" />ここに<span className="olive-period">。</span></>}</h1><p>{page === 'create' ? '「勉強になります」の、その先へ。小さな気づきを、つながる言葉に。' : '保存したリプライを見返して、あなたらしい言葉の引き出しに。'}</p></div><span className="hero-decoration" aria-hidden="true"><Feather size={38} strokeWidth={1} /><span>words connect us</span></span></section>
-        {page === 'create' ? <>
-          <div className="workflow"><span><b>01</b> 投稿を貼り付ける</span><span className="workflow-line" /><span><b>02</b> ニュアンスを選ぶ</span><span className="workflow-line" /><span><b>03</b> あなたの言葉に整える</span></div>
+        <section className="hero"><div className="hero-copy"><span className="hero-eyebrow"><span />YOUR WORDS, BETTER CONNECTIONS</span><h1>{createPage ? <>Xの投稿に、<span className="hero-title-end">ちょうどいい返信を。</span></> : page === 'saved' ? 'とっておきの返信を、いつでも。' : 'あの言葉を、もう一度。'}</h1><p>{createPage ? '投稿の流れをたどって、あなたらしい言葉に。' : page === 'saved' ? '気に入った言葉を集めて、あなたの引き出しに。' : 'これまでの投稿と返信案を、まとめて振り返れます。'}</p></div><HeroArt /></section>
+        {createPage ? <>
           <div className="studio-grid">
             <form className="compose-panel" onSubmit={generate}>
-              <div className="panel-heading"><div><span className="section-icon"><MessageSquare size={17} /></span><h2>リプライのもと</h2></div><span className="step-label">STEP 01 — 02</span></div>
-              <div className="compose-body">
-                <div className="field-title"><label htmlFor="post">相手の投稿</label><span className="required">必須</span><button type="button" className="sample-button" onClick={useSample} disabled={busy}><Sparkles size={12} />サンプルを入れる</button></div>
-                <div className={`post-input-wrap ${error && !post.trim() ? 'invalid' : ''}`}><textarea id="post" ref={postRef} value={post} onChange={event => { setPost(event.target.value); setError(''); }} maxLength={5000} placeholder={'リプライしたいXの投稿を、ここに貼り付けてください。\n\n気になったノウハウや、心に残った言葉など。'} disabled={busy} /><div className="post-input-footer"><span><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 2H22l-6.8 7.8L23.2 22h-6.3L12 14.6 5.5 22H2.4l8.2-9.4L.8 2h6.5l4.5 6.8L18.9 2ZM17.8 20h1.7L6.3 3.9H4.5L17.8 20Z" /></svg>投稿の本文を入力してください</span><span>{post.length.toLocaleString()} / 5,000</span></div></div>
-                <div className="author-row"><label htmlFor="author">投稿者のお名前<span>任意</span></label><input id="author" value={author} maxLength={80} onChange={event => setAuthor(event.target.value)} placeholder="例：ヒロさん" disabled={busy} /></div>
-                <div className="form-divider" />
-                <fieldset disabled={busy}><legend><span className="field-label">どんな雰囲気で伝える？</span></legend><div className="tone-options">{TONES.map(item => <button type="button" key={item.id} className={tone === item.id ? 'selected' : ''} aria-pressed={tone === item.id} onClick={() => setTone(item.id)}>{tone === item.id && <Check size={13} />}{item.name}</button>)}</div></fieldset>
-                <fieldset className="direction-field" disabled={busy}><legend><span className="field-label">伝えたいこと</span><span className="optional-label">複数選択OK</span></legend><div className="direction-options">{DIRECTIONS.map(({ id, name, icon: Icon }) => <button type="button" key={id} className={directions.includes(id) ? 'selected' : ''} aria-pressed={directions.includes(id)} onClick={() => setDirections(items => items.includes(id) ? items.length > 1 ? items.filter(item => item !== id) : items : [...items, id])}><Icon size={13} />{name}{directions.includes(id) ? <Check size={11} /> : <Plus size={11} />}</button>)}</div></fieldset>
-                <div className="thought-field"><label htmlFor="thought">あなたの気づき・試したいこと<span className="optional-label">任意</span></label><textarea id="thought" value={thought} maxLength={300} onChange={event => setThought(event.target.value)} placeholder="例：まずは今日の小さな気づきから発信してみたい" rows={2} disabled={busy} /><p>ひと言添えると、もっとあなたらしく。</p></div>
-                <div className="fine-options"><label htmlFor="length">文章の長さ <span className="select-wrap"><select id="length" aria-label="文章の長さ" value={length} onChange={event => setLength(event.target.value)} disabled={busy}><option value="short">短め</option><option value="medium">ほどよく</option><option value="long">しっかり</option></select><ChevronDown size={12} /></span></label><label className="emoji-toggle"><input type="checkbox" checked={emoji} onChange={event => setEmoji(event.target.checked)} disabled={busy} /><span className="toggle-track"><span /></span>絵文字を添える</label></div>
-                {error && <p className="form-error" role="alert"><CircleHelp size={15} />{error}</p>}
-                <button className="generate-button" type="submit" disabled={busy}><Sparkles size={17} className={busy ? 'spinning' : ''} />{busy ? '言葉を整えています…' : replies.length ? 'もう一度、リプライ案をつくる' : 'リプライ案をつくる'}{!busy && <ArrowRight size={17} />}</button>
-                <p className="generation-mode"><span className={`status-dot ${mode === 'unavailable' ? 'offline' : ''}`} />{mode === 'ai' ? 'AIで、投稿の文脈に合わせて3案作成' : mode === 'local' ? 'APIキー不要 · 文章パターンから3案作成' : mode === 'unavailable' ? 'サーバーに接続できません。起動状況をご確認ください。' : '接続を確認しています…'}<button type="button" aria-label="生成方法について" onClick={() => setModal('about')}><CircleHelp size={12} /></button></p>
-              </div>
+              <div className="panel-heading"><h2><Link2 size={20} />元ポストを貼り付け</h2><button type="button" className="sample-button" aria-label="サンプルを入れる" onClick={useSample} disabled={working}><Sparkles size={12} />サンプルを使う</button></div>
+              <div className="input-tabs" role="group" aria-label="投稿の入力方法"><button type="button" aria-pressed={inputMode === 'url'} className={inputMode === 'url' ? 'active' : ''} onClick={() => chooseInputMode('url')} disabled={working}><Link2 size={14} />リンクから読み込む</button><button type="button" aria-pressed={inputMode === 'text'} className={inputMode === 'text' ? 'active' : ''} onClick={() => chooseInputMode('text')} disabled={working}><AlignLeft size={14} />本文を貼り付ける</button></div>
+              {inputMode === 'url' ? <div className="url-section"><label htmlFor="post-url" className="sr-only">ポストのリンク</label><div className={`url-input-wrap ${error && !source ? 'has-error' : ''}`}><Link2 size={16} /><input id="post-url" ref={urlRef} value={postUrl} onChange={event => changeUrl(event.target.value)} placeholder="https://x.com/…/status/…" type="text" inputMode="url" maxLength={500} autoComplete="off" spellCheck={false} disabled={working} /><button type="button" className="read-button" onClick={importOnly} disabled={working || !postUrl.trim()}>{importing ? <LoaderCircle size={13} className="spinning" /> : <ArrowRight size={14} />}{importing ? '取得中' : '読み込む'}</button></div><div className="url-caption"><span><Check size={12} />公開ポスト・連続投稿に対応</span><button type="button" onClick={() => setModal('reading')} aria-label="リンク読み取りについて"><CircleHelp size={13} /></button></div>
+                {source ? <div className="thread-preview"><div className="thread-preview-header"><span className="post-avatar">{source.author.name?.slice(0, 1) || 'X'}</span><div><strong>{source.author.name}</strong><span>@{source.author.handle}</span></div><span className={`thread-count ${source.partial ? 'partial' : ''}`}><Layers3 size={12} />{source.posts.length}件{source.partial ? '・一部未取得' : 'を取得'}</span></div><ol className="thread-posts">{source.posts.map((item, index) => <li key={item.id}><div className="thread-position"><span>{index + 1}</span><i /></div><div className="thread-post-content"><div className="thread-post-label"><span>{index === 0 ? '最初に取得した投稿' : index === source.posts.length - 1 ? '最後に取得した投稿' : '続きの投稿'}</span>{item.id === source.id && <b>リンク先</b>}<a href={item.url} target="_blank" rel="noreferrer" aria-label={`${index + 1}件目の投稿をXで開く`}><ExternalLink size={12} /></a></div><p>{item.text}</p></div></li>)}</ol><div className="thread-summary"><CheckCheck size={13} />{source.posts.length}件・{source.body.length.toLocaleString()}文字を返信づくりに使用</div>{source.warnings.length > 0 && <div className="coverage-warning">{source.warnings.map(warning => <p key={warning}><CircleAlert size={12} />{warning}</p>)}</div>}<p className="coverage-caption">取得サービスから返された範囲です。すべての続きが含まれるか、送信前にご確認ください。</p><details className="edit-imported"><summary><AlignLeft size={12} />読み取った本文を編集・補足する</summary><label className="sr-only" htmlFor="imported-post">取得した投稿の本文</label><textarea id="imported-post" value={post} onChange={event => setPost(event.target.value)} maxLength={CONTENT_LIMIT} rows={6} disabled={working} /></details></div>
+                : <div className={`url-empty ${importing ? 'loading' : ''}`}><span className="url-empty-icon">{importing ? <LoaderCircle size={22} className="spinning" /> : <Layers3 size={24} />}</span><strong>{importing ? '投稿の流れを読み込んでいます' : 'リンクひとつで、言葉の背景まで。'}</strong><p>{importing ? progress : <>途中のポストのリンクからも、<br />前後の連続投稿を探します。</>}</p>{importing && <button type="button" className="text-button" onClick={cancelImport}>読み込みを中止する</button>}</div>}
+              </div> : <div className="text-section"><label htmlFor="post" className="sr-only">相手の投稿</label><div className="post-input-wrap"><textarea id="post" ref={postRef} value={post} onChange={event => { setPost(event.target.value); setError(''); }} maxLength={CONTENT_LIMIT} placeholder={'返信したいポストの本文を貼り付けてください。\n\n長いポストや連続投稿は、最初から最後までまとめて貼り付けられます。'} disabled={working} /><div className="post-input-footer"><span><MessageSquare size={11} />ポストの本文・連続投稿</span><span>{post.length.toLocaleString()} / {CONTENT_LIMIT.toLocaleString()}</span></div></div><div className="author-row"><label htmlFor="author">投稿者のお名前<span>任意</span></label><input id="author" value={author} maxLength={80} onChange={event => setAuthor(event.target.value)} placeholder="例：ヒロさん" disabled={working} /></div></div>}
+              <fieldset className="tone-field" disabled={working}><legend><Send size={16} />返信のトーンを選択</legend><div className="tone-options">{TONES.map(({ id, name, icon: Icon, detail }) => <button type="button" key={id} title={detail} className={`${tone === id ? 'selected' : ''} tone-${id}`} aria-pressed={tone === id} onClick={() => setTone(id)}><Icon size={22} fill={id === 'empathy' ? 'currentColor' : 'none'} /><span>{name}</span>{tone === id && <i><Check size={8} /></i>}</button>)}</div></fieldset>
+              <details className="more-options"><summary><Settings size={14} />あなたらしさを、もう少し<ChevronDown size={13} /></summary><div><fieldset disabled={working}><legend className="field-label">伝えたいこと<span>複数選択OK</span></legend><div className="direction-options">{DIRECTIONS.map(item => <button type="button" key={item.id} aria-pressed={directions.includes(item.id)} className={directions.includes(item.id) ? 'selected' : ''} onClick={() => setDirections(items => items.includes(item.id) ? items.length > 1 ? items.filter(value => value !== item.id) : items : [...items, item.id])}>{directions.includes(item.id) ? <Check size={11} /> : <Plus size={11} />}{item.name}</button>)}</div></fieldset><label htmlFor="thought" className="field-label thought-label">あなたの気づき・試したいこと<span>任意</span></label><textarea id="thought" value={thought} onChange={event => setThought(event.target.value)} maxLength={300} rows={2} placeholder="例：まずは今日の小さな気づきを発信してみたい" disabled={working} /><div className="fine-options"><label htmlFor="length">文章の長さ <span className="select-wrap"><select id="length" aria-label="文章の長さ" value={length} onChange={event => setLength(event.target.value)} disabled={working}><option value="short">短め</option><option value="medium">ほどよく</option><option value="long">しっかり</option></select><ChevronDown size={12} /></span></label><label className="emoji-toggle"><input type="checkbox" checked={emoji} onChange={event => setEmoji(event.target.checked)} disabled={working} /><span className="toggle-track"><span /></span>絵文字を添える</label></div></div></details>
+              {error && <p className="form-error" role="alert"><CircleAlert size={16} />{error}</p>}
+              <button className="generate-button" type="submit" disabled={working}>{working ? <LoaderCircle size={19} className="spinning" /> : <Sparkles size={20} />}<span>{importing ? '投稿を読み込んでいます…' : busy ? '返信を整えています…' : '返信を生成'}</span>{!working && <ChevronRight size={20} />}</button>
+              <p className="generation-mode">{mode === 'ai' ? <><Sparkles size={12} />AIが全文を読み、3つの返信をご提案</> : mode === 'unavailable' ? <><CircleAlert size={12} />サーバーに接続できません</> : mode ? <><ShieldCheck size={12} />APIキー不要・文章パターンから3案作成</> : '接続を確認しています…'}<button type="button" aria-label="生成方法について" onClick={() => setModal('about')}><CircleHelp size={12} /></button></p>
             </form>
-            <section className="results-panel" ref={resultRef} aria-busy={busy} aria-label="リプライの候補">
-              <div className="results-heading"><div><span className="section-icon"><Sparkles size={17} /></span><h2>あなたのリプライ案</h2>{replies.length > 0 && <span className="result-count">3</span>}</div><span className="step-label">STEP 03</span></div>
-              {replies.length === 0 ? <div className={`empty-results ${busy ? 'is-loading' : ''}`}><ReplyIllustration /><span className="empty-eyebrow">A GOOD CONVERSATION STARTS HERE</span><h3>{busy ? 'あなたの気づきを、言葉に。' : 'その気づきが、会話のはじまり。'}</h3><p>{busy ? <>投稿を読み取り、3つの角度から<br />リプライを整えています。</> : <>相手の投稿を入れて、ボタンを押すと<br />ニュアンスの異なる3つの案が届きます。</>}</p><div className="empty-tags"><span><Lightbulb size={12} /> 具体的な気づき</span><span><Leaf size={12} /> 自然なひと言</span><span><MessageCircle size={12} /> 返しやすさ</span></div><div className="empty-guide"><span>ちょっとしたコツ</span><p>うまい言葉より、「どこに心が動いたか」。<br />あなたが感じたことを、ひとつ添えてみてください。</p></div></div> : <div className={`reply-list ${busy ? 'refreshing' : ''}`}><p className="results-intro">{resultMode === 'ai' ? '投稿に合わせた3案です。' : '投稿の言葉を拾った、文章パターンによる3案です。'}<br />気に入った案を、あなたの言葉に整えてみてください。</p>{replies.map((reply, index) => <ReplyCard {...cardProps} key={reply.id} reply={reply} index={index} />)}<button className="regenerate-button" onClick={generate} disabled={busy}><RefreshCw size={13} className={busy ? 'spinning' : ''} />{busy ? '別の表現を考えています…' : '別の表現でもう一度つくる'}</button></div>}
-              <div className="gentle-reminder"><span><Leaf size={14} /></span><p>返事をもらうことより、まずは誠実なひと言を。<br /><strong>送る前に、あなた自身の気持ちに合っているか確認しましょう。</strong></p></div>
-            </section>
+            <section className="results-panel" ref={resultRef} aria-busy={working} aria-label="リプライの候補"><div className="results-heading"><h2>生成された返信</h2><span>{replies.length ? '3件の提案' : 'あなたらしい言葉を、ここに'}</span></div>{replies.length ? <div className={`reply-list ${working ? 'refreshing' : ''}`}>{replies.map((reply, index) => <ReplyCard {...cardProps} key={reply.id} reply={reply} index={index} />)}<p className="edit-hint"><AlignLeft size={12} />本文はクリックして、自由に編集できます。</p><button type="button" className="regenerate-button" disabled={working} onClick={generate}><RefreshCw size={14} className={working ? 'spinning' : ''} />別の表現でつくり直す</button>{snapshot.sourceUrl && <a className="source-link" href={snapshot.sourceUrl} target="_blank" rel="noreferrer">返信するポストをXで開く<ArrowUpRight size={12} /></a>}</div> : <div className="empty-results"><EmptyArt /><span className="empty-eyebrow">GOOD WORDS. GOOD CONNECTIONS.</span><h3>伝えたい気持ちを、<br />もっと、いい言葉で。</h3><p>ポストを読み込み、トーンを選んだら<br />「返信を生成」を押すだけ。</p><div className="empty-tags"><span><Sparkles size={12} />具体的な気づき</span><span><Heart size={12} />自然な共感</span><span><MessageCircle size={12} />会話のきっかけ</span></div><div className="empty-tip"><LightbulbIcon /><p>「勉強になります」に、<br /><strong>どこが心に残ったか</strong>をひと言添えて。</p></div></div>}<div className="gentle-reminder"><ShieldCheck size={16} /><p>送る前に、あなたの気持ちと合っているか確認しましょう。<br /><span>体験や実績をつくり足さず、自然なひと言を大切に。</span></p></div></section>
           </div>
-          <div className="bottom-note"><span><MessageCircle size={15} /></span><p><strong>つながりは、一通のリプライから。</strong> 相手へのリスペクトと、あなたらしいひと言を大切に。</p><span className="bottom-flower" aria-hidden="true">✳</span></div>
-        </> : <section className="saved-panel"><div className="saved-toolbar"><h2>保存したリプライ <span>{saved.length}</span></h2><input aria-label="保存したリプライを検索" value={filter} onChange={event => setFilter(event.target.value)} placeholder="言葉で検索する…" /></div>{saved.length === 0 ? <div className="archive-empty"><Bookmark size={32} strokeWidth={1} /><h3>残しておきたい言葉を、ここに。</h3><p>リプライ案のしおりマークを押すと保存できます。</p><button className="secondary-button" onClick={() => navigate('create')}><Plus size={15} />リプライをつくる</button></div> : <div className="saved-grid">{saved.filter(reply => (reply.text + reply.title + reply.post).includes(filter)).map((reply, index) => <ReplyCard {...cardProps} key={reply.id} reply={reply} index={index} archive />)}{saved.filter(reply => (reply.text + reply.title + reply.post).includes(filter)).length === 0 && <p className="no-results">この言葉を含むリプライはありません。</p>}</div>}<p className="storage-note">保存先はこのブラウザです。ブラウザのデータを削除すると、保存した内容も削除されます。</p></section>}
-        <footer className="page-footer"><span>kotoba<span className="olive-period">.</span></span><p>ひと言に、あなたらしさを。</p><span>MADE FOR MEANINGFUL CONNECTIONS</span></footer>
+          <section className="benefits" aria-label="Reply Craftの特徴"><div><span><Zap size={21} fill="currentColor" /></span><div><strong>かんたん3ステップ</strong><p>リンクを貼って、トーンを選んで、<br />あなたらしい返信へ。</p></div></div><div><span><Smile size={21} /></span><div><strong>あなたらしい返信</strong><p>気づきや試したいことを添えて、<br />自然な言葉に整えます。</p></div></div><div><span><ShieldCheck size={21} /></span><div><strong>保存はこのブラウザに</strong><p>気に入った言葉を保存して、<br />いつでも振り返れます。</p></div></div><div><span><MessageCircle size={21} /></span><div><strong>Xでのつながりを</strong><p>相手へのリスペクトを込めた、<br />小さな会話のきっかけに。</p></div></div></section>
+        </> : page === 'saved' ? <section className="saved-panel"><div className="collection-toolbar"><h2><Heart size={18} />保存した返信<span>{saved.length}</span></h2><label className="search-box"><Search size={15} /><input aria-label="保存したリプライを検索" value={filter} onChange={event => setFilter(event.target.value)} placeholder="言葉で検索する…" /></label></div>{saved.length === 0 ? <div className="archive-empty"><Heart size={35} strokeWidth={1.3} /><h3>残しておきたい言葉を、ここに。</h3><p>返信案のハートを押すと保存できます。</p><button className="secondary-button" onClick={() => navigate('create')}><Plus size={15} />返信をつくる</button></div> : <div className="saved-grid">{filteredSaved.map((reply, index) => <ReplyCard {...cardProps} key={reply.id} reply={reply} index={index} archive />)}{filteredSaved.length === 0 && <p className="no-results">この言葉を含むリプライはありません。</p>}</div>}<p className="storage-note">保存先はこのブラウザです。ブラウザのデータを削除すると、保存した内容も削除されます。</p></section> : <section className="history-panel"><div className="collection-toolbar"><h2><History size={19} />作成履歴<span>{history.length}</span></h2><label className="search-box"><Search size={15} /><input aria-label="履歴を検索" value={filter} onChange={event => setFilter(event.target.value)} placeholder="本文・投稿者で検索…" /></label></div>{history.length === 0 ? <div className="archive-empty"><Clock3 size={35} strokeWidth={1.3} /><h3>ここから、言葉を積み重ねよう。</h3><p>作成した返信と元の投稿が、自動で履歴に残ります。</p><button className="secondary-button" onClick={() => navigate('create')}><Plus size={15} />返信をつくる</button></div> : <div className="history-list">{filteredHistory.map(item => <article className="history-card" key={item.id}><div className="history-card-top"><span><Clock3 size={13} />{dateLabel(item.createdAt)}</span><span>{item.postCount || 1}件の投稿・3件の返信</span><button className="icon-button" aria-label="この履歴を削除" onClick={() => deleteHistory(item.id)}><Trash2 size={15} /></button></div><p>{item.post}</p><div className="history-card-bottom"><span>{TONES.find(tone => tone.id === item.tone)?.name || '丁寧'}</span><button type="button" onClick={() => restoreHistory(item)}>この返信を開く<ArrowRight size={14} /></button></div></article>)}{filteredHistory.length === 0 && <p className="no-results">この言葉を含む履歴はありません。</p>}</div>}<p className="storage-note">履歴はこのブラウザに最新20件を保存します。保存した返信は履歴と別に残ります。</p></section>}
+        <footer className="page-footer"><Brand small /><span>いい返信で、つながりが広がる。</span><button onClick={() => setModal('reading')}>データの取り扱い</button></footer>
       </main>
     </div>
-    {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
-    {modal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setModal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={modalRef}><button className="modal-close icon-button" aria-label="閉じる" onClick={() => setModal(null)}><X size={20} /></button><span className="modal-icon">{modal === 'preferences' ? <Settings2 size={22} /> : modal === 'about' ? <Sparkles size={23} /> : <Leaf size={24} />}</span><h2 id="modal-title">{modal === 'preferences' ? 'いつもの文体を、覚えておく。' : modal === 'about' ? 'リプライ案のつくり方' : '心が伝わる、ひと言のヒント。'}</h2>{modal === 'preferences' ? <><p className="modal-description">次に開いたときも、この雰囲気で始められます。</p><label className="modal-label">いつもの雰囲気<select value={tone} onChange={event => setTone(event.target.value)}>{TONES.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="modal-label">文章の長さ<select value={length} onChange={event => setLength(event.target.value)}><option value="short">短め</option><option value="medium">ほどよく</option><option value="long">しっかり</option></select></label><label className="modal-checkbox"><input type="checkbox" checked={emoji} onChange={event => setEmoji(event.target.checked)} />絵文字を添える</label><button className="generate-button" onClick={savePreferences}><Check size={16} />この文体を保存する</button></> : modal === 'about' ? <><div className="guide-item"><strong>文章パターンモード（標準）</strong><p>投稿から拾った言葉と、あらかじめ用意した表現を組み合わせます。APIキー不要で、生成時に外部のAIへ投稿を送信しません。文脈に合うか、送る前に確認してください。</p></div><div className="guide-item"><strong>AIモード（任意設定）</strong><p>サーバーに REPLY_API_KEY を設定すると、OpenAIで文脈に合わせて作成します。投稿と入力内容がOpenAIに送信され、APIの利用料金がかかります。設定手順はREADMEをご確認ください。</p></div><div className="privacy-note">Xへの自動投稿や、投稿URLの自動読み取りは行いません。本文を貼り付け、コピーしてご利用ください。</div></> : <><div className="guide-item"><span>01</span><div><strong>投稿の、ひとつの言葉に目を留める。</strong><p>「勉強になります」だけでなく、どの視点が響いたのかを添えると、読んだことが伝わります。</p></div></div><div className="guide-item"><span>02</span><div><strong>経験を盛らず、これからを伝える。</strong><p>「実践して成果が出ました」ではなく、「まずこれを意識してみたいです」。今の自分の言葉で十分です。</p></div></div><div className="guide-item"><span>03</span><div><strong>質問するなら、答えやすいものをひとつ。</strong><p>投稿にすでに書かれていることは聞かず、実践の一歩について尋ねてみましょう。質問を添えない案も選べます。</p></div></div><div className="privacy-note">返信を保証するものではありません。相手への敬意と、無理のない会話のペースを大切に。</div></>}</section></div>}
+    {toast && <div className="toast" role="status"><Check size={17} />{toast}</div>}
+    {modal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setModal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={modalRef}><button className="modal-close icon-button" aria-label="閉じる" onClick={() => setModal(null)}><X size={20} /></button><span className="modal-icon">{modal === 'preferences' ? <Settings size={23} /> : modal === 'reading' ? <Link2 size={24} /> : <Sparkles size={24} />}</span><h2 id="modal-title">{modal === 'preferences' ? 'いつもの文体を、覚えておく。' : modal === 'reading' ? 'リンク読み取りとデータについて' : modal === 'about' ? '返信案のつくり方' : 'ひと言から、会話がはじまる。'}</h2>{modal === 'preferences' ? <><p className="modal-description">次に開いたときも、この雰囲気で始められます。</p><label className="modal-label">いつもの雰囲気<select value={tone} onChange={event => setTone(event.target.value)}>{TONES.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="modal-label">文章の長さ<select value={length} onChange={event => setLength(event.target.value)}><option value="short">短め</option><option value="medium">ほどよく</option><option value="long">しっかり</option></select></label><label className="modal-checkbox"><input type="checkbox" checked={emoji} onChange={event => setEmoji(event.target.checked)} />絵文字を添える</label><button className="generate-button" onClick={savePreferences}><Check size={17} />この文体を保存する</button></> : modal === 'reading' ? <><div className="guide-item"><strong>公開ポストと、同じ投稿者の連続投稿を取得</strong><p>ポストのIDを外部の非公式取得サービスFxEmbed（FxTwitter）へ送信して本文を取得します。途中のリンクから、前後の投稿をたどります。他ユーザーの返信は混ぜず、取得できた投稿を時系列順に表示します。Xのログイン情報やパスワードは不要です。</p></div><div className="guide-item"><strong>読み込めた範囲を確認できます</strong><p>非公開・削除・取得制限のある投稿や、画像内の文字、動画・音声の内容は取得できません。サービスがすべての続きを返す保証はありません。件数と本文を確認し、足りない内容は編集欄で補足してください。</p></div><div className="guide-item"><strong>保存と履歴は、このブラウザの中に</strong><p>保存した返信・履歴・文体設定はブラウザ内に保管します。別の端末とは同期しません。本文を貼り付けて文章パターンで生成する場合は、外部サービスへの通信は行いません。</p></div></> : modal === 'about' ? <><div className="guide-item"><strong>文章パターン（標準・無料）</strong><p>読み込んだ全文から、冒頭・途中・最後の言葉を拾い、3つの表現に整えます。文脈を意味理解するAIではありません。投稿と追加した気づきのつながりを、送信前に確認してください。</p></div><div className="guide-item"><strong>AIでの生成（サーバー版のみ）</strong><p>サーバーにAIのAPIキーを設定すると、全文をもとにした生成を利用できます。現在のGitHub Pages版は文章パターンで動作します。AI利用時は投稿が接続先AIに送信され、別途利用料金がかかります。</p></div><div className="privacy-note">返信を保証するものではありません。相手への敬意を込めて、無理のないペースでご利用ください。</div></> : <><div className="guide-item"><span>01</span><div><strong>リンクを貼るだけで、投稿の流れを確認。</strong><p>XのポストURLを貼り付けて「読み込む」を押します。「返信を生成」から、そのまま読み取りと作成を続けることもできます。</p></div></div><div className="guide-item"><span>02</span><div><strong>あなたの気持ちに合うトーンを選ぶ。</strong><p>丁寧・フレンドリー・共感・実践・短文から選びます。質問を添えたいときは「あなたらしさを、もう少し」を開いて選択してください。</p></div></div><div className="guide-item"><span>03</span><div><strong>ひと言整えて、コピーしてXへ。</strong><p>本文をクリックすると編集できます。ハートで保存、作成した返信は履歴からも振り返れます。Xへの自動投稿は行いません。</p></div></div><button className="secondary-button" onClick={() => setModal('reading')}><Link2 size={14} />リンク読み取りについて</button></>}</section></div>}
   </div>;
 }
-
+function LightbulbIcon() { return <span className="tip-spark"><Sparkles size={18} /></span>; }
 export default App;

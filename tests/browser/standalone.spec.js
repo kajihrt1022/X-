@@ -13,8 +13,9 @@ test('HTML単体で外部通信なしに生成・編集・コピー・保存・�
   await context.setOffline(true);
   await page.goto('http://127.0.0.1:4174/kotoba.html');
   await page.getByRole('button', { name: 'サンプルを入れる' }).click();
+  await page.getByText('あなたらしさを、もう少し', { exact: true }).click();
   await page.getByRole('button', { name: '質問を添える' }).click();
-  await page.getByRole('button', { name: 'リプライ案をつくる', exact: true }).click();
+  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
   await expect(page.locator('.reply-card')).toHaveCount(3);
   await expect(page.getByLabel('案3の本文')).toHaveValue(/？/);
   const text = '小さな発見を記録する視点が勉強になります。今日から意識してみます。';

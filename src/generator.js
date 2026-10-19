@@ -1,4 +1,5 @@
 import twitterText from 'twitter-text';
+import { CONTENT_LIMIT } from './post-reader.js';
 
 export const countText = text => twitterText.parseTweet(text).weightedLength;
 export const LIMITS = { short: 120, medium: 200, long: 280 };
@@ -17,7 +18,7 @@ export function validateInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('入力内容を確認してください。');
   if (typeof input.post !== 'string' || !input.post.trim()) throw new Error('リプライしたい投稿の本文を入力してください。');
   if (/^https?:\/\/\S+$/.test(input.post.trim())) throw new Error('URLだけでは投稿を読み取れません。投稿の本文を貼り付けてください。');
-  if (input.post.length > 5000) throw new Error('投稿の本文は5,000文字以内で入力してください。');
+  if (input.post.length > CONTENT_LIMIT) throw new Error(`投稿の本文は${CONTENT_LIMIT.toLocaleString()}文字以内で入力してください。`);
   const thought = typeof input.thought === 'string' ? input.thought.trim() : '';
   if (thought.length > 300) throw new Error('気づき・試したいことは300文字以内で入力してください。');
   const directions = Array.isArray(input.directions) ? input.directions.filter(d => ['insight', 'action', 'question'].includes(d)) : ['insight', 'action'];
@@ -25,7 +26,7 @@ export function validateInput(input) {
     post: input.post.trim(),
     author: typeof input.author === 'string' ? input.author.slice(0, 80) : '',
     thought,
-    tone: ['natural', 'warm', 'brief'].includes(input.tone) ? input.tone : 'natural',
+    tone: ['natural', 'warm', 'brief', 'empathy', 'action'].includes(input.tone) ? input.tone : 'natural',
     length: Object.hasOwn(LIMITS, input.length) ? input.length : 'medium',
     directions: directions.length ? [...new Set(directions)] : ['insight'],
     emoji: input.emoji === true,
@@ -47,8 +48,16 @@ export function generateLocal(rawInput) {
   const input = validateInput(rawInput);
   const limit = LIMITS[input.length];
   const quotes = excerpts(input.post, input.length === 'short' ? 28 : input.length === 'long' ? 100 : 66);
-  const quote = i => `「${quotes[(i + input.variation) % quotes.length].replaceAll('「', '『').replaceAll('」', '』')}」`;
-  const warm = input.tone === 'warm';
+  // Read across the full text: opening, middle and ending, including a thread's
+  // final post. Regeneration varies each region without silently dropping it.
+  const anchors = [0, Math.floor((quotes.length - 1) / 2), quotes.length - 1];
+  const quote = i => {
+    const base = anchors[i % 3];
+    const span = Math.max(1, Math.ceil(quotes.length / 3));
+    const at = input.variation % 2 === 0 ? base : Math.min(quotes.length - 1, base + (input.variation % span));
+    return `「${quotes[at].replaceAll('「', '『').replaceAll('」', '』')}」`;
+  };
+  const warm = input.tone === 'warm' || input.tone === 'empathy';
   const brief = input.tone === 'brief';
   const endings = warm ? ['が、特に心に残りました。', '、大切にしたい視点ですね。'] : ['という視点が勉強になります。', 'という言葉が印象に残りました。'];
   const name = input.author.trim() ? `${fitText(input.author.trim(), 36)}、` : '';

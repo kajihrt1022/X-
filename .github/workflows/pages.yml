@@ -1,9 +1,15 @@
-name: Publish kotoba to GitHub Pages
+name: Publish Reply Craft to GitHub Pages
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      test_post_url:
+        description: 'Optional public X post URL for live reader verification'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -23,14 +29,29 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm test
+      - run: npm run build
       - run: npm run build:standalone -- site/index.html
+      - name: Verify live X thread reader
+        if: github.event_name == 'workflow_dispatch' && inputs.test_post_url != ''
+        env:
+          TEST_POST_URL: ${{ inputs.test_post_url }}
+        run: node scripts/check-post-reader.mjs
+      - name: Verify URL workflow in browser
+        if: github.event_name == 'workflow_dispatch' && inputs.test_post_url != ''
+        env:
+          TEST_POST_URL: ${{ inputs.test_post_url }}
+          CHROMIUM_PATH: /usr/bin/google-chrome
+        run: node scripts/check-reader-browser.mjs
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     permissions:
       pages: write
       id-token: write
@@ -41,3 +62,20 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Verify published site in browser
+        env:
+          TEST_SITE_URL: ${{ needs.deploy.outputs.page_url }}
+          TEST_POST_URL: ${{ inputs.test_post_url }}
+          CHROMIUM_PATH: /usr/bin/google-chrome
+        run: node scripts/check-reader-browser.mjs

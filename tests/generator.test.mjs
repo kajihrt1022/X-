@@ -45,8 +45,16 @@ test('文体・方向性・追加した気づきを反映し、再生成で表�
 });
 
 test('空白、URLのみ、過大な本文、不正な入力を拒否する', () => {
-  for (const value of [null, [], { post: '   ' }, { post: 'https://x.com/user/status/1' }, { post: 'あ'.repeat(5001) }, { post, thought: 'あ'.repeat(301) }]) assert.throws(() => validateInput(value));
+  for (const value of [null, [], { post: '   ' }, { post: 'https://x.com/user/status/1' }, { post: 'あ'.repeat(60001) }, { post, thought: 'あ'.repeat(301) }]) assert.throws(() => validateInput(value));
   assert.equal(validateInput({ post, tone: 'invalid', length: 'invalid' }).tone, 'natural');
+});
+
+test('長いスレッドでも、冒頭だけでなく最後の結論を返信案に含める', () => {
+  const body = ['冒頭は相手への関心が大切。', ...Array.from({ length: 12 }, (_, index) => `途中の話題${index + 1}を紹介します。`), '最後は小さな約束を守ることが信頼になる。'].join('\n');
+  const result = generateLocal({ post: body, length: 'long' });
+  assert.match(result.replies[0].text, /相手への関心/);
+  assert.match(result.replies[2].text, /小さな約束/);
+  assert.doesNotThrow(() => validateInput({ post: '長い連続投稿の本文。'.repeat(1000) }));
 });
 
 test('Xの重み付き文字数を使い、URL・絵文字・日本語の途中で壊さない', () => {

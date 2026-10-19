@@ -21,7 +21,7 @@ const result = await build({
 // System fonts keep the portable edition small and independent of all networks.
 const css = (await readFile(new URL('src/style.css', root), 'utf8')).replace(/^@import[^;]+;\s*/gm, '');
 const js = result.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
-const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#5b6745"><title>kotoba — リプライ作成ツール</title><style>${css}</style></head><body><div id="root"></div><script>globalThis.__KOTOBA_STANDALONE__=true;</script><script>${js}</script></body></html>`;
+const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#1766ff"><meta name="description" content="ポストのリンクから会話の流れを読み込み、あなたらしい返信へ。Reply CraftはXのリプライを考える作業室です。"><title>Reply Craft — いい返信で、つながりが広がる。</title><style>${css}</style></head><body><div id="root"></div><script>globalThis.__KOTOBA_STANDALONE__=true;</script><script>${js}</script></body></html>`;
 await mkdir(resolve(output, '..'), { recursive: true });
 await writeFile(output, html);
 console.log(`Standalone HTML saved: ${output} (${Buffer.byteLength(html)} bytes)`);
