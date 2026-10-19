@@ -3,6 +3,14 @@ import { CONTENT_LIMIT } from './post-reader.js';
 
 export const countText = text => twitterText.parseTweet(text).weightedLength;
 export const LIMITS = { short: 120, medium: 200, long: 280 };
+const EMOJI_PATTERN = /(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F|[#*0-9]\uFE0F?\u20E3)/u;
+export const hasEmoji = text => EMOJI_PATTERN.test(text);
+
+export function ensureEmoji(text, limit = 280) {
+  if (!text.trim() || hasEmoji(text)) return text;
+  const suffix = ' 😊';
+  return fitText(text.trimEnd(), limit - countText(suffix)) + suffix;
+}
 
 export function fitText(text, limit) {
   if (countText(text) <= limit) return text;
@@ -26,10 +34,8 @@ export function validateInput(input) {
     post: input.post.trim(),
     author: typeof input.author === 'string' ? input.author.slice(0, 80) : '',
     thought,
-    tone: ['natural', 'warm', 'brief', 'empathy', 'action'].includes(input.tone) ? input.tone : 'natural',
     length: Object.hasOwn(LIMITS, input.length) ? input.length : 'medium',
     directions: directions.length ? [...new Set(directions)] : ['insight'],
-    emoji: input.emoji === true,
     variation: Number.isSafeInteger(input.variation) ? Math.abs(input.variation % 100) : 0,
   };
 }
@@ -57,18 +63,16 @@ export function generateLocal(rawInput) {
     const at = input.variation % 2 === 0 ? base : Math.min(quotes.length - 1, base + (input.variation % span));
     return `「${quotes[at].replaceAll('「', '『').replaceAll('」', '』')}」`;
   };
-  const warm = input.tone === 'warm' || input.tone === 'empathy';
-  const brief = input.tone === 'brief';
-  const endings = warm ? ['が、特に心に残りました。', '、大切にしたい視点ですね。'] : ['という視点が勉強になります。', 'という言葉が印象に残りました。'];
+  const endings = ['という視点が勉強になります。', 'という言葉が印象に残りました。'];
   const name = input.author.trim() ? `${fitText(input.author.trim(), 36)}、` : '';
   const insight = `${name}${quote(0)}${endings[input.variation % endings.length]}`;
-  const action = `${quote(1)}${warm ? '、意識してみたいです。' : 'を意識してみます。'}`;
+  const action = `${quote(1)}を意識してみます。`;
   const useQuestion = input.directions.includes('question');
   const useAction = input.directions.includes('action');
   const useInsight = input.directions.includes('insight');
   const thought = input.thought;
   const connect = (base, addition, tail = '') => {
-    const suffix = input.emoji ? ' 😊' : '';
+    const suffix = ' 😊';
     const budget = limit - countText(suffix);
     const required = tail ? '\n' + tail : '';
     base = fitText(base, budget - countText(required));
@@ -83,13 +87,13 @@ export function generateLocal(rawInput) {
     {
       title: useInsight ? '気づきを、まっすぐに' : useAction ? '小さな一歩を伝える' : '関心を、まっすぐに',
       kind: useInsight ? 'insight' : useAction ? 'action' : 'insight',
-      text: connect(useInsight ? insight : useAction ? action : `${quote(0)}について、もう少し知りたいです。`, brief ? '' : useAction ? '\nまずは一つ、普段の行動に取り入れてみたいです。' : ''),
+      text: connect(useInsight ? insight : useAction ? action : `${quote(0)}について、もう少し知りたいです。`, useAction ? '\nまずは一つ、普段の行動に取り入れてみたいです。' : ''),
       note: '投稿の言葉をひとつ拾って、読んだことが伝わる形に。',
     },
     {
       title: useAction ? 'やってみたい、を言葉に' : '心に残ったことを伝える',
       kind: useAction ? 'action' : 'insight',
-      text: connect(useAction ? (versions ? `まずは${quote(1)}から意識してみます。` : action) : `${quote(1)}。${warm ? 'この視点、覚えておきたいです。' : '大切にしたい視点です。'}`, brief ? '' : useInsight ? '\n行動に移すきっかけをいただきました。' : ''),
+      text: connect(useAction ? (versions ? `まずは${quote(1)}から意識してみます。` : action) : `${quote(1)}。大切にしたい視点です。`, useInsight ? '\n行動に移すきっかけをいただきました。' : ''),
       note: '実績や体験を付け足さず、これからの行動として伝えます。',
     },
     {
@@ -97,7 +101,7 @@ export function generateLocal(rawInput) {
       kind: useQuestion ? 'question' : useInsight ? 'insight' : 'action',
       text: connect(useQuestion
         ? `${quote(2)}、勉強になります。`
-        : useInsight ? `${quote(2)}。${warm ? 'この言葉、覚えておきたいです。' : 'これから意識したい視点です。'}` : `${quote(2)}を、まずは試してみたいです。`, '', useQuestion ? versions ? 'まず何から始めるのがおすすめですか？' : '実践でつまずきやすい点はありますか？' : ''),
+        : useInsight ? `${quote(2)}。これから意識したい視点です。` : `${quote(2)}を、まずは試してみたいです。`, '', useQuestion ? versions ? 'まず何から始めるのがおすすめですか？' : '実践でつまずきやすい点はありますか？' : ''),
       note: useQuestion ? '質問はひとつだけ。投稿内で既に答えがないか確認しましょう。' : '無理に質問を添えず、ひとつの気づきに絞っています。',
     },
   ];

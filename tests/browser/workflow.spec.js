@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { hasEmoji } from '../../src/generator.js';
 
 test('生成・連続編集・コピー・保存・再読込・検索・削除が使える', async ({ page }) => {
   const errors = [];
@@ -20,15 +21,17 @@ test('生成・連続編集・コピー・保存・再読込・検索・削除�
   await expect(editor).toBeFocused();
   const edited = await editor.inputValue();
   await page.locator('.reply-card').first().getByRole('button', { name: 'コピー', exact: true }).click();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(edited);
+  const copiedText = edited + ' 😊';
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(copiedText);
+  await expect(editor).toHaveValue(copiedText);
   await page.getByRole('button', { name: '案1を保存', exact: true }).click();
   await page.reload();
   await page.getByRole('button', { name: '保存したリプライ' }).click();
-  await expect(page.locator('.saved-text')).toHaveText(edited);
+  await expect(page.locator('.saved-text')).toHaveText(copiedText);
   await page.getByRole('textbox', { name: '保存したリプライを検索' }).fill('見つからない言葉');
   await expect(page.getByText('この言葉を含むリプライはありません。')).toBeVisible();
   await page.getByRole('textbox', { name: '保存したリプライを検索' }).fill('気づき');
-  await expect(page.locator('.saved-text')).toHaveText(edited);
+  await expect(page.locator('.saved-text')).toHaveText(copiedText);
   await page.getByRole('button', { name: '保存を削除' }).click();
   await expect(page.locator('.archive-empty')).toBeVisible();
   expect(errors).toEqual([]);
@@ -49,15 +52,23 @@ test('URLだけの入力とサーバーエラーを表示し、再試行でき�
   await expect(page.locator('.reply-card')).toHaveCount(3);
 });
 
-test('文体の設定が保存され、ダイアログをキーボードで閉じられる', async ({ page }) => {
+test('トーン選択が不要で、古い絵文字オフ設定からも絵文字つきの3案を生成する', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar').getByRole('button', { name: /いつもの文体を設定/ }).click();
-  await page.getByLabel('いつもの雰囲気').selectOption('warm');
-  await page.getByRole('dialog').getByLabel('文章の長さ').selectOption('short');
-  await page.getByRole('button', { name: 'この文体を保存する' }).click();
+  await page.evaluate(() => localStorage.setItem('kotoba-preferences', JSON.stringify({ tone: 'empathy', emoji: false, length: 'long' })));
   await page.reload();
-  await expect(page.getByRole('button', { name: 'フレンドリー', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('返信のトーンを選択', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '共感', exact: true })).toHaveCount(0);
+  await page.locator('.sidebar').getByRole('button', { name: '返信の設定', exact: true }).click();
+  await expect(page.getByLabel('いつもの雰囲気')).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: '絵文字を添える' })).toHaveCount(0);
+  await page.getByRole('dialog').getByLabel('文章の長さ').selectOption('short');
+  await page.getByRole('button', { name: '設定を保存する' }).click();
+  await page.reload();
   await expect(page.getByLabel('文章の長さ', { exact: true })).toHaveValue('short');
+  await page.getByRole('button', { name: 'サンプルを入れる' }).click();
+  await page.getByRole('button', { name: '返信を生成', exact: true }).click();
+  await expect(page.locator('.reply-card')).toHaveCount(3);
+  for (const value of await page.locator('.reply-editor').evaluateAll(elements => elements.map(element => element.value))) expect(hasEmoji(value)).toBe(true);
   await page.getByRole('button', { name: '使い方ガイド' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.keyboard.press('Escape');

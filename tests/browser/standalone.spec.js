@@ -25,7 +25,7 @@ test('HTML単体で外部通信なしに生成・編集・コピー・保存・�
   await expect(page.getByRole('status')).toContainText('コピーしました');
   await page.reload();
   await page.getByRole('button', { name: '保存したリプライ' }).click();
-  await expect(page.locator('.saved-text')).toHaveText(text);
+  await expect(page.locator('.saved-text')).toHaveText(text + ' 😊');
   await page.getByRole('textbox', { name: '保存したリプライを検索' }).fill('小さな');
   await expect(page.locator('.saved-text')).toHaveCount(1);
   await page.getByRole('button', { name: '保存を削除' }).click();

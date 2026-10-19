@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { countText, fitText, generateLocal, LIMITS, validateInput } from '../src/generator.js';
+import { countText, ensureEmoji, fitText, generateLocal, hasEmoji, LIMITS, validateInput } from '../src/generator.js';
 
 const post = '発信は完璧を目指さなくていい。小さな気づきを毎日記録する。等身大の言葉を大切にしよう。';
 
@@ -16,14 +16,14 @@ test('投稿の具体的な言葉を拾った異なる3案を作成する', () =
   }
 });
 
-test('各文字数と絵文字の組み合わせで上限を守り、選択した質問を最後まで残す', () => {
+test('古い絵文字オフ設定でも全案に絵文字を入れ、文字数と質問を守る', () => {
   for (const length of Object.keys(LIMITS)) {
     for (const emoji of [true, false]) {
       for (const variation of [0, 1, 2]) {
         const result = generateLocal({ post, length, emoji, variation, directions: ['insight', 'action', 'question'], thought: '自分が気づいたことを毎日一つずつ記録して、発信につなげていきたいと思います。'.repeat(3) });
         for (const reply of result.replies) {
           assert.ok(countText(reply.text) <= LIMITS[length], `${length}: ${reply.text}`);
-          assert.equal(reply.text.includes('😊'), emoji);
+          assert.equal(hasEmoji(reply.text), true);
         }
         assert.match(result.replies[2].text, /[？?](?: 😊)?$/);
         assert.equal(result.replies.filter(reply => /[？?]/.test(reply.text)).length, 1);
@@ -32,11 +32,11 @@ test('各文字数と絵文字の組み合わせで上限を守り、選択し�
   }
 });
 
-test('文体・方向性・追加した気づきを反映し、再生成で表現を変える', () => {
+test('古いトーン指定に影響されず、方向性・気づき・再生成を反映する', () => {
   const input = { post, length: 'long', thought: 'まずは今日の気づきを一つ書いてみたいです。', directions: ['insight', 'action'] };
   const natural = generateLocal(input);
   const warm = generateLocal({ ...input, tone: 'warm' });
-  assert.notEqual(natural.replies[0].text, warm.replies[0].text);
+  assert.deepEqual(natural.replies, warm.replies);
   for (const reply of natural.replies) assert.ok(reply.text.includes(input.thought));
   assert.notDeepEqual(natural.replies, generateLocal({ ...input, variation: 1 }).replies);
   assert.ok(generateLocal({ ...input, author: 'ヒロさん' }).replies[0].text.startsWith('ヒロさん、'));
@@ -46,7 +46,7 @@ test('文体・方向性・追加した気づきを反映し、再生成で表�
 
 test('空白、URLのみ、過大な本文、不正な入力を拒否する', () => {
   for (const value of [null, [], { post: '   ' }, { post: 'https://x.com/user/status/1' }, { post: 'あ'.repeat(60001) }, { post, thought: 'あ'.repeat(301) }]) assert.throws(() => validateInput(value));
-  assert.equal(validateInput({ post, tone: 'invalid', length: 'invalid' }).tone, 'natural');
+  assert.equal(validateInput({ post, tone: 'invalid', length: 'invalid' }).length, 'medium');
 });
 
 test('長いスレッドでも、冒頭だけでなく最後の結論を返信案に含める', () => {
@@ -64,4 +64,18 @@ test('Xの重み付き文字数を使い、URL・絵文字・日本語の途中�
   const fitted = fitText('😊こんにちは世界', 8);
   assert.ok(countText(fitted) <= 8);
   assert.ok(!fitted.includes('\uFFFD'));
+});
+
+
+test('AI出力・編集後の本文にも、文字数上限内で絵文字を補える', () => {
+  for (const limit of Object.values(LIMITS)) {
+    const text = ensureEmoji('あ'.repeat(limit / 2), limit);
+    assert.ok(hasEmoji(text));
+    assert.ok(countText(text) <= limit);
+  }
+  assert.equal(ensureEmoji('やってみます！🙏'), 'やってみます！🙏');
+  assert.equal(ensureEmoji('参考になります✨'), '参考になります✨');
+  assert.equal(ensureEmoji(''), '');
+  assert.equal(hasEmoji('123 © 2026'), false);
+  assert.ok(hasEmoji(ensureEmoji('123 © 2026')));
 });

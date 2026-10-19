@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import assert from 'node:assert/strict';
+import { hasEmoji } from '../src/generator.js';
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 try {
@@ -24,6 +25,8 @@ try {
   const alert = page.getByRole('alert');
   if (await alert.count()) throw new Error(await alert.innerText());
   assert.equal(await page.locator('.reply-card').count(), 3);
+  assert.equal(await page.getByText('返信のトーンを選択', { exact: true }).count(), 0);
+  for (const draft of await page.locator('.reply-editor').evaluateAll(elements => elements.map(element => element.value))) assert.ok(hasEmoji(draft), 'Every draft must include an emoji');
   let details = 'manual input';
   if (process.env.TEST_POST_URL) {
     assert.ok(await page.locator('.thread-posts > li').count() > 0);
